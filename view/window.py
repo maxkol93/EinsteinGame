@@ -11,6 +11,7 @@ from System.Drawing import (
 
 from random import choice
 import time
+import datetime
 import os
 
 from buttons import GameButton, RuleButton, FieldButton
@@ -35,6 +36,7 @@ class GameWindow(Form):
         self._cells = []
         self._rules_buttons = []
         self._get_dir_path()
+        # self._dir_path_images = self._get_dir_path()
         self._initialize_components(rules)
     
     def _initialize_components(self, rules):
@@ -66,6 +68,13 @@ class GameWindow(Form):
         line_1 = PictureBox()
         line_1.Parent = self
         line_1.Size = Size(3, 700)
+        # Если посмотреть на проекты С#, то там есть удобный класс Resources,
+        # доступный из коробки для каждого проекта.
+        # Я думаю можно также все ресурсы отправить в отдельный модуль, так как у вас их очень много,
+        # там будет проще ими управлять и в окне вызывать атрибуты модуля:
+        # import resources
+        # line_1.Image = Image.FromFile(resources.LINE_700)
+        # либо сделать это классом и передавать во все слои игры где нужны ресурсы.
         line_1.Image = Image.FromFile(self._dir_path_images + 'line_700.png')
         line_1.Location = Point(self._field_width, 0)
 
@@ -122,8 +131,22 @@ class GameWindow(Form):
         for rule in self._rules_buttons:
             for btn in rule:
                 btn.MouseDown += handler
-    
+
+    # Вы похоже забыли убрать аргумент btn, так как он не используется в данной функции.
+    # Когда читаешь _rules_buttons - думаешь что это одноуровневый список с кнопками, а оказывается,
+    # Что кнопки там сгруппированы в другую более высокоуровневую сущность, такую как "правило".
+    # И получается что это не список кнопок, а список правил.
+    # Поэтому можно изменить _rules_buttons, на _rules или _rule_lines.
+    # И думаю функцию можно переименовать в disable_rule, так как этой функцией вы отключаете
+    # одно правило.
     def disable_rule_buttons(self, btn, index):
+        # Не лучшее решение испльзоваться range, а если код поменяется и кнопок будет больше или меньше?
+        # может стоит переписать вот так?
+        # for button in self._rules[index]:
+        #     смотря на следующую строку button.change_color(), можно догадаться, что действите по
+        #     изменению состояния нажатия тоже можно положить в кнопку чтобы было вот так
+        #     button.reverse_press()
+        #     button.change_color()
         for i in range(3):
             self._rules_buttons[index][i].pressed = not self._rules_buttons[index][i].pressed
             self._rules_buttons[index][i].change_color()
@@ -140,8 +163,9 @@ class GameWindow(Form):
             for_loose = [
                 "don't worry and try again!",
                 'be careful and try again!',
-                'but you still have a chance!']
-            self._result.Text = 'you lose! ' + choice(for_loose)
+                'but you still have a chance!'
+            ]  # я бы назвал это loose_messages
+            self._result.Text = 'you lose! ' + choice(for_loose)  # хорошее решение
         elif state_of_game == 'first_wrong':
             for_wrong = [
                 'wrong! =(',
@@ -150,7 +174,8 @@ class GameWindow(Form):
                 'it looks like the correct button?',
                 'read the rules again!',
                 'do you think this is a good move?',
-                'how could you click here?']
+                'how could you click here?'
+                ]
             self._result.Text = choice(for_wrong) + ' 2 attempts left.'
             self._count_good = 0
         elif state_of_game == 'second_wrong':
@@ -161,7 +186,8 @@ class GameWindow(Form):
                 'drink some coffee, can it help?',
                 'how will you get out of this situation?',
                 'delete the game please!',
-                'Alt+F4 please!']
+                'Alt+F4 please!'
+                ]
             self._result.Text = choice(for_wrong) + ' 1 attempt left.'
             self._count_good = 0
         elif state_of_game == 'good':
@@ -187,17 +213,34 @@ class GameWindow(Form):
             ]
             self._result.Text = choice(for_win)
         self._result.TextAlign = ContentAlignment.MiddleCenter
-    
+
     def timer_update(self, value):
+        # Форматирование времени - оч хорошо
+        # но вот так будет написано поинтересней
+        # self._timer.Text = time.strftime("%M:%S", time.gmtime(value))
         self._timer.Text = '{}{}:{}{}'.format(value // 60 // 10, value // 60 % 10, value % 60 // 10, value % 60 % 10)
-    
+
     def timer_font_updane(self, win):
         if win:
             self._timer.ForeColor = Color.Yellow
         else:
             self._timer.ForeColor = Color.Red
-    
+
     def define_start_cells(self, rules): # rule - [44, 'define', 3]
+        # Если вы хотите оставить себе подсказку для этого метода, это явный признак того что к нему
+        # нужно писать документацию. Делается это вот так.
+        '''Смысл метода вот в этом ...
+        rules: List[List[int, str, int]]
+            Пример: [44, 'define', 3]
+            Первый элемент в списке - это то-то...
+            Второй элемент - это то-то...
+            и т.д.
+        второй аргумент если надо.
+        '''
+        # НО! Если вы объединили 3 потенциальных аргумента в один список, то стоило создать класс Rule,
+        # и список экземпляров этого класса передавать в метод.
+        # Значения списка были бы свойствами этого класса, тогда бы вы повысили читаемость кода
+        # из-за того что удобнее понимать что такое rule.first_symbol, чем rule[0]
         for rule in rules:
             y = rule[0] // 10 - 1
             x = rule[2]
@@ -210,6 +253,8 @@ class GameWindow(Form):
                 self.remove_button(btn)
 
     def _click_on_game_rules(self, sender, event_args):
+        # Можно же было создать класс RulesWindow)
+        # Положить его в слой view, а тут просто вызвать)
         game_rules_window = Form()
         game_rules_window.Text = 'Einstein game - Rules'
         game_rules_window.FormBorderStyle = FormBorderStyle.Fixed3D
@@ -219,13 +264,26 @@ class GameWindow(Form):
         game_rules_window.AutoScroll = True
         game_rules_window.BackColor = Color.FromArgb(40, 40, 40)
         back_image = PictureBox()
-        game_rules_window.Controls.Add(back_image)
         back_image.Size = Size(900, 1767)
         back_image.Image = Image.FromFile(self._dir_path_images + 'Game_rules_900_1767.jpg')
         back_image.Location = Point(0, 0)
+        game_rules_window.Controls.Add(back_image)
+        # Советую запускать окно правил в не модальном режиме, чтобы оно не блокировало окно игры.
+        # game_rules_window.Show()
+        # но, тут может возникнуть проблема, если окно правил открыто, а окно игры обновляют, тобишь
+        # старое закрывается и открывается новое, окно правил может зависнуть
+        # так как оно было открыто из потока предыдущего окна.
+        # Есть несколько решений:
+        # 1. Закрывать окно правил;
+        # 2. Запускать его из главного потока игры, а не из потока окна.
         game_rules_window.ShowDialog()
 
+    # Если это путь к картинкам, то это всё же ресурсы, а не просто какая-та директория dir
     def _get_dir_path(self):
+        # Опять же все поля нужно инициализировать в методе __init__
+        # чтобы формировать пути, лучше использовать os.path.join
+        # self._dir_path_images = os.path.join(os.path.dirname(__file__), 'images')
+        # там где составляется путь к конкретному ресурсу нужно так же воспользоваться этим методом
         self._dir_path_images = os.path.dirname(__file__) + '\\images\\'
 
     def _create_rules_buttons(self, rules):
@@ -364,6 +422,7 @@ class GameWindow(Form):
     @property
     def defined_cells_count(self):
         return self._defined_cells_count
+
 
 if __name__ == '__main__':
     f = GameWindow([[11,22,33],[44,55,66]])

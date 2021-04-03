@@ -15,7 +15,13 @@ class GameButton(Button):
         self.ForeColor = Color.White
 
     def set_color(self, value):
-        if type(value) == int:
+        # Для цветов и других констант можно завести отдельный модуль с настройками
+        # settings.py
+        # LIGHT_RED = (255, 103, 76, 81)
+        # а в данном модуле использовать вот так.
+        # import settings
+        # self.BackColor = Color.FromArgb(*settings.lIGHT_RED)
+        if type(value) == int:  # вот эту проверку лучше делать вот так isinstance(value, int)
             if value // 10 == 1:
                 self.BackColor = Color.FromArgb(255, 103, 76, 81)
             if value // 10 == 2:
@@ -33,12 +39,14 @@ class GameButton(Button):
         else:
             self.BackColor = Color.Transparent
 
+
 class RuleButton(GameButton):
     def __init__(self, index, value):
         super(RuleButton, self).__init__()
         self._pressed = False
         self._index = index
-        self._n = value
+        self._n = value  # не понятно что это за поле, сразу и не поймёшь его назначение и не понятно
+        # нужно оно классу или оно может оставаться локальной переменной метода.
         self.Font = Font('Arial', 18)
         self.FlatAppearance.BorderSize = 1
         self.set_color(self._n)
@@ -63,7 +71,11 @@ class RuleButton(GameButton):
             if type(self._n) == int:
                 clr_1 = self.BackColor
                 self.BackColor = Color.FromArgb(50, clr_1.R, clr_1.G, clr_1.B)
+                # можно воспользоваться другой перегрузкой и не использовать лишнюю переменную и
+                # лишние действия с классом Color.
+                # self.BackColor = Color.FromArgb(50, self.BackColor)
             self.ForeColor= Color.FromArgb(65, 65, 65)
+
 
 class FieldButton(GameButton):
     def __init__(self, y, x, n):
