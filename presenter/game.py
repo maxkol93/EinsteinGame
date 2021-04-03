@@ -6,6 +6,8 @@ from System.Windows.Forms import MouseButtons
 from random import choice
 
 from view.window import GameWindow
+# Пока что не смотрел этот класс, но уже настрораживает слово And в названии класса,
+# возможно будет лучше его разделить.
 from model.field_and_rules import FieldAndRules
 from model.timer import Timer
 
@@ -15,11 +17,15 @@ class Game(object):
         self._model = None
         self._view = None
         self._is_game_over = False
-        self._score = 0
+        self._score = 0  # похоже прозапас поле осталось)
         self._current_index = 0
         self._timer = 0
 
     def start(self, complexity):
+        # это поле лучше инициализировать в __init__ потому что если появится метод, который будет
+        # вызываться до метода start и в нём будет изпользоваться данное поле, то код упадёт с ошибкой
+        # и сразу не будет понятно почему, ведь в данном классе это поле есть и другие методы вроде
+        # бы работают.
         self._count_wrong = 0
         self._is_game_over = False
         self._complexity = complexity
@@ -34,10 +40,25 @@ class Game(object):
         self._timer = Timer(self._view.timer_update, self._game_over)
         self._timer.start()
         self._view.ShowDialog()
-    
+
     def _complexity_change(self, sender, event_args):
         self._view.Hide()
         self._view.Close()
+        # как я уже писал в модуле main, числа лучше заменить на константы класса
+        # Возможно стоило бы написать этот метод так чтобы пользователь выбирал сложность,
+        # а потом нажимал кнопку restart?
+        # def _complexity_change(self, sender, event_args):
+        #     self._view.Hide()
+        #     self._view.Close()
+        #     if self._complexity == Game.HARD:
+        #         self._complexity == Game.NORMAL
+        #     if self._complexity == Game.NORMAL:
+        #         self._complexity == Game.EASY
+        #     if self._complexity == Game.EASY:
+        #         self._complexity == Game.HARD
+        # Для того чтобы данный метод только менял сложность для следующей игры
+        # просто когда ты видишь метод который меняет сложность, не подразумеваешь
+        # что он будет заного запускать игру.
         if self._complexity == 20:
             self.start(10)
         elif self._complexity == 10:
@@ -45,6 +66,8 @@ class Game(object):
         elif self._complexity == 0:
             self.start(20)
 
+    # Переименование sender в btn норм тема особенно когда вы точно знаете вызывающего.
+    # Но я бы не стал жадничать символы и написал бы button полностью)
     def _mouse_button_dawn(self, btn, args):
         if args.Button == MouseButtons.Left:
             if self._model[btn.y][btn.x] == btn.n:
@@ -64,7 +87,7 @@ class Game(object):
                     self._view.set_massage('win')
                     self._timer.stop_timer()
                     self._view.timer_font_updane(True)
-    
+
     def _mouse_click_on_rule(self, btn, args):
         if args.Button == MouseButtons.Left:
             self._view.disable_rule_buttons(btn, btn.index)
@@ -72,11 +95,8 @@ class Game(object):
     def _game_over(self):
         self._view.disable_buttons()
         self._is_game_over = True
-    
+
     def _restart_game(self, sender, event_args): # sender - button
         self._view.Hide()
         self._view.Close()
         self.start(self._complexity)
-
-
-

@@ -1,6 +1,7 @@
 import time
 from threading import Thread
 
+
 class Timer(Thread):
     def __init__(self, delegate, handler):
         super(Timer, self).__init__()

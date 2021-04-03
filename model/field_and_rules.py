@@ -2,8 +2,16 @@
 from random import randint, choice
 from self_walkthrough import SelfWalkthrough
 
-
+# В любом случае если в классе есть слово And, значит этот класс точно надо разбивать на два.
+# Но я решил посмотреть почему именно так. Если свернуть все методы и свойства, то мы увидим,
+# что у класса 4 публичных свойства и один магический метод.
+# 3 из которых представляют поле (field), а одно представляет правила.
+# Магический метод так же относится к полю.
+# Единственное место где эти два класса пересекаются - это метод _initialize_self_walkthrough.
+# Мне кажется это можно смело вынести в Game, а данный класс разделить.
+# Причём таким образом: Field, RuleManager, Rule
 class FieldAndRules(object):
+    # м, поясняющая документация, отлично
     '''
     Этот класс генерирует финальное поле и логические условия игры.
     '''
@@ -13,6 +21,12 @@ class FieldAndRules(object):
         self._rules = []
         self._defined_start_cells_count = comlexity
         self._defined_start_cells = []
+        # вот generate_final_field возвращает значение и передаёт его
+        # в поле класса, а данный метод всё делает внутри себя, в том числе и создаёт новое поле,
+        # хотя общий смысл один: создать поле класса и заполнить его значением.
+        # Нужно стараться быть последовательным и принимать одинаковые решения.
+        # Мой совет: всегда инициализировать поля классов только в конструкторе, но я об этом уже
+        # писал в других модулях.
         self._generate_start_rules()
         self._initialize_self_walkthrough()
 
@@ -23,12 +37,15 @@ class FieldAndRules(object):
     @property
     def rules(self):
         return self._rules
-    
+ 
     @property
+    # Я бы заменил на start_cells
     def defined_start_cells(self):
         return self._defined_start_cells
-    
+
     @property
+    # пока не понятно зачем нужно отдельное свойство для получения количества стартовых ячеек
+    # если есть свойство возвращающее список этих ячеек
     def defined_start_cells_count(self):
         return self._defined_start_cells_count
 
@@ -38,6 +55,11 @@ class FieldAndRules(object):
             row = []
             count = self._size
             while count:
+                # для лучшего понимания данную строку нужно
+                # поместить в функцию generate_unique_number() и можно даже проверку на наличие в
+                # строке поместить туда же. И в таком случае while count можно будет заменить на
+                # for x in range(self._size) и таким образом будет понятней что первый цикл проходит
+                # по строкам, а второй по столбцам.
                 n = (y + 1) * 10 + randint(1, self._size)
                 if n not in row:
                     row.append(n)
@@ -46,8 +68,10 @@ class FieldAndRules(object):
         return data
 
     def _generate_start_rules(self):
+        # данный комментарий лучше перенести в документацию метода.
         self._min_nums = [] # 30 рандомных ячеек, по 5 из каждого ряда. Необходимый минимум для логических условий
-        for row in range(6):
+        for row in range(6):  # а тут вы почему-то не используете self._size, когда измениться поле,
+            # то можно получить неожиданный результат.
             random_inds = range(6)
             random_inds.remove(randint(0, 5))
             for column in random_inds:
@@ -61,7 +85,8 @@ class FieldAndRules(object):
             self._defined_start_cells.append(rule)
             self._min_nums.remove(num)
 
-        while len(self._min_nums): # создание минимальных стартовых условий
+        while len(self._min_nums): # создание минимальных стартовых условий - если есть потребность
+            # дать имя этому циклу, то это явный признак того, что он должен уйти в функцию. 
             for num in self._min_nums:
                 if len(self._min_nums) != 1: # создание правила с 2 рандомными ячейками
                     self._min_nums.remove(num)
@@ -81,10 +106,12 @@ class FieldAndRules(object):
 
     def _run_update_rules(self):
         '''
-        Добавление уловий игры, пока игрна точно не будет проходима.
+        Добавление уловий игры, пока игра точно не будет проходима.
         '''
         while True:
-            r = self._create_rule(randint(1, 4)) # 1-4 тип условия игры
+            r = self._create_rule(randint(1, 4)) # 1-4 тип условия игры. Это можно перевести в тип Enum
+            # не понятно что такое 1 или 4, но если это будет соответствовать значению перечисления,
+            # то с этим будет проще работать. А выбирать можно было бы через рандомную функцию choice
             if (r not in self._rules) and (reversed(r) not in self._rules):
                 self._rules.append(r)
                 self._walkthrough_game.updete_rules(self._rules)
@@ -96,7 +123,7 @@ class FieldAndRules(object):
         y2 = num2[0]
         x2 = num2[1]
         if x1 == x2: # в одом столбце
-            rule_type = 1
+            rule_type = 1  # Возвращаясь к теме Enum, тут было бы понятней что это.
         elif abs(x1 - x2) == 1: # либо в соседних столбцах, либо лево-право
             rule_type = choice([2, 3, 3])
         elif abs(x1 - x2) == 2: # либо 3 в ряд, либо лево-право
