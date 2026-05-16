@@ -1,22 +1,35 @@
-import time
-from threading import Thread
-
-class Timer(Thread):
+class Timer(object):
     def __init__(self, delegate, handler):
-        super(Timer, self).__init__()
-        self.daemon = True
-        self._stop = False
+        self._stopped = False
         self._value = 0
+        self._accumulator_ms = 0
         self._delegate_timer_update_in_view = delegate
-        self._end_game_hanler = handler
+        self._end_game_handler = handler
 
-    def run(self):
-        while not self._stop:
-            self._delegate_timer_update_in_view(self._value)
+    def start(self):
+        self._stopped = False
+        self._value = 0
+        self._accumulator_ms = 0
+        self._delegate_timer_update_in_view(self._value)
+
+    def tick(self, dt_ms):
+        if self._stopped:
+            return
+        self._accumulator_ms += dt_ms
+        while self._accumulator_ms >= 1000:
+            self._accumulator_ms -= 1000
             self._value += 1
-            time.sleep(1)
-        self._end_game_hanler()
+            self._delegate_timer_update_in_view(self._value)
 
     def stop_timer(self):
-        self._stop = True
-        self._Thread__stop()
+        if not self._stopped:
+            self._stopped = True
+            self._end_game_handler()
+
+    @property
+    def value(self):
+        return self._value
+
+    @property
+    def stopped(self):
+        return self._stopped
