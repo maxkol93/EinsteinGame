@@ -105,8 +105,8 @@ class SelfWalkthrough(object):
         if len(defined_cells) == 2:
             self._define_other(defined_cells, rule)
         # если определена одна крайняя - определяем остальные
-        if len(defined_cells) == 1 and 0 in defined_cells or 2 in defined_cells: 
-            if defined_cells.values()[0] <= 1 or defined_cells.values()[0] >= (self._size - 2):
+        if len(defined_cells) == 1 and 0 in defined_cells or 2 in defined_cells:
+            if list(defined_cells.values())[0] <= 1 or list(defined_cells.values())[0] >= (self._size - 2):
                 self._define_other(defined_cells, rule)
         else:
             self._check_other(defined_cells, rule)
@@ -162,7 +162,7 @@ class SelfWalkthrough(object):
             if x == 1 and self._field[y_2][0] == num_2 or x == self._size - 2 and self._field[y_2][self._size - 1] == num_2: # если соседний от края
                 self._define_this_cell(y_1, x, num_1)
             if self._field[y_2][x] == num_2:
-                inds_for_remove = range(self._size)
+                inds_for_remove = list(range(self._size))
                 inds_for_remove.remove(x - 1)
                 inds_for_remove.remove(x + 1)
                 for i in inds_for_remove:
@@ -179,7 +179,7 @@ class SelfWalkthrough(object):
 
     def _define_other(self, defined_cells, rule):
         if len(defined_cells) == 1: # одна определена
-            x = defined_cells.values()[0]
+            x = list(defined_cells.values())[0]
             ys = [i // 10 - 1 for i in rule]
             ind_1 = 1
             if 0 in defined_cells: # [defined_cell, ind_1, ind_2]
@@ -194,8 +194,9 @@ class SelfWalkthrough(object):
             self._define_this_cell(ys[ind_2], x + dx * 2, rule[ind_2])
 
         elif len(defined_cells) == 2: # 2 определены
-            if abs(defined_cells.values()[0] - defined_cells.values()[1]) == 2: # [defined_cell, ..., defined_cell]
-                cur_x = sum(defined_cells.values()) / 2
+            vals = list(defined_cells.values())
+            if abs(vals[0] - vals[1]) == 2: # [defined_cell, ..., defined_cell]
+                cur_x = sum(vals) // 2
                 cur_ind = 1
             else:
                 if 0 not in defined_cells: # [..., defined_cell, defined_cell]
@@ -211,34 +212,39 @@ class SelfWalkthrough(object):
         y_1 = rule[1] // 10 - 1
         y_2 = rule[2] // 10 - 1
         if 1 in defined_cells:
-            inds = range(self._size)
-            inds.remove(defined_cells[1] - 1)
-            inds.remove(defined_cells[1] + 1)
+            inds = list(range(self._size))
+            self._safe_remove(inds, defined_cells[1] - 1)
+            self._safe_remove(inds, defined_cells[1] + 1)
             for x in inds:
                 self._remove_number_in_cell(y_0, x, rule[0])
                 self._remove_number_in_cell(y_2, x, rule[2])
         elif 0 in defined_cells:
-            xs_1 = range(self._size)
-            xs_1.remove(defined_cells[0] - 1)
-            xs_1.remove(defined_cells[0] + 1)
-            xs_2 = range(self._size)
-            xs_2.remove(defined_cells[0] - 2)
-            xs_2.remove(defined_cells[0] + 2)
+            xs_1 = list(range(self._size))
+            self._safe_remove(xs_1, defined_cells[0] - 1)
+            self._safe_remove(xs_1, defined_cells[0] + 1)
+            xs_2 = list(range(self._size))
+            self._safe_remove(xs_2, defined_cells[0] - 2)
+            self._safe_remove(xs_2, defined_cells[0] + 2)
             for x in xs_1:
                 self._remove_number_in_cell(y_1, x, rule[1])
             for x in xs_2:
                 self._remove_number_in_cell(y_2, x, rule[2])
         elif 2 in defined_cells:
-            xs_1 = range(self._size)
-            xs_1.remove(defined_cells[2] - 1)
-            xs_1.remove(defined_cells[2] + 1)
-            xs_0 = range(self._size)
-            xs_0.remove(defined_cells[2] - 2)
-            xs_0.remove(defined_cells[2] + 2)
+            xs_1 = list(range(self._size))
+            self._safe_remove(xs_1, defined_cells[2] - 1)
+            self._safe_remove(xs_1, defined_cells[2] + 1)
+            xs_0 = list(range(self._size))
+            self._safe_remove(xs_0, defined_cells[2] - 2)
+            self._safe_remove(xs_0, defined_cells[2] + 2)
             for x in xs_1:
                 self._remove_number_in_cell(y_1, x, rule[1])
             for x in xs_0:
                 self._remove_number_in_cell(y_0, x, rule[0])
+
+    @staticmethod
+    def _safe_remove(lst, value):
+        if value in lst:
+            lst.remove(value)
 
 #-----------------взаимодействия с полем, удаление лишних значений----------------------------------
 

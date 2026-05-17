@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from random import randint, choice
-from self_walkthrough import SelfWalkthrough
+from model.self_walkthrough import SelfWalkthrough
 
 
 class FieldAndRules(object):
@@ -48,7 +48,7 @@ class FieldAndRules(object):
     def _generate_start_rules(self):
         self._min_nums = [] # 30 рандомных ячеек, по 5 из каждого ряда. Необходимый минимум для логических условий
         for row in range(6):
-            random_inds = range(6)
+            random_inds = list(range(6))
             random_inds.remove(randint(0, 5))
             for column in random_inds:
                 self._min_nums.append((row, column))
@@ -115,7 +115,7 @@ class FieldAndRules(object):
         elif rule_type == 3: # в соседних столбцах
             self._rules.append([self._final_field[y1][x1], '<->', self._final_field[y2][x2]])
         elif rule_type == 4: # 3 в ряд
-            x_mid = (x1 + x2) / 2
+            x_mid = (x1 + x2) // 2
             y_mid = randint(0, 5)
             if (y_mid, x_mid) in self._min_nums:
                 self._min_nums.remove((y_mid, x_mid))
