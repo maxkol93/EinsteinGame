@@ -1,7 +1,7 @@
-import os
 import pygame
 
 from view.decoder import decode_symbol
+from view.anim import approach, lerp_color
 
 
 BG_COLOR = (40, 40, 40)
@@ -51,6 +51,7 @@ def _brighten(color, amount):
 # get clean smooth edges. The cache prevents re-rendering each frame.
 _ROUNDED_FILL_CACHE = {}
 _ROUNDED_BORDER_CACHE = {}
+_SHADOW_CACHE = {}
 SSAA = 4
 
 
@@ -100,6 +101,25 @@ def rounded_border(w, h, color, radius, width=1):
     return pad
 
 
+def soft_shadow(w, h, radius, alpha=165):
+    """A blurred dark rounded blob used as a drop shadow for lifted tiles."""
+    key = (int(w), int(h), int(radius), int(alpha))
+    cached = _SHADOW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    pad = 12
+    sw, sh = w + pad * 2, h + pad * 2
+    surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    pygame.draw.rect(surf, (0, 0, 0, alpha), (pad, pad, w, h),
+                     border_radius=radius + 2)
+    # cheap two-step blur: shrink then grow back
+    small = pygame.transform.smoothscale(
+        surf, (max(1, sw // 3), max(1, sh // 3)))
+    surf = pygame.transform.smoothscale(small, (sw, sh))
+    _SHADOW_CACHE[key] = surf
+    return surf
+
+
 def mask_to_round(surface, radius):
     """Return a copy of `surface` clipped to a rounded-rect alpha mask.
     Uses SSAA so the corners come out smooth, not staircased."""
@@ -118,13 +138,23 @@ def mask_to_round(surface, radius):
 def clear_rounded_cache():
     _ROUNDED_FILL_CACHE.clear()
     _ROUNDED_BORDER_CACHE.clear()
+    _ROUNDED_TINT_CACHE.clear()
 
 
 class GameButton(object):
-    """Base button: rectangle (rounded), optional bg image, text, color, click cb."""
+    """Base button: rounded rect / image / text, plus animated hover state.
+
+    Two independent hover signals are tracked, both eased every frame:
+    - ``glow``  : the highlight brightness (0..1),
+    - ``lift``  : the "pick the card up" amount (0..1) — scale + drop shadow.
+    The window sets ``glow_target`` / ``lift_target``; ``animate`` chases them.
+    """
 
     DEFAULT_RADIUS_BIG = 12
     DEFAULT_RADIUS_SMALL = 6
+
+    LIFT_SCALE = 0.09     # extra scale at full lift
+    LIFT_RISE = 8         # pixels risen at full lift
 
     def __init__(self, rect=(0, 0, 50, 50), text='', font=None,
                  bg_image=None, bg_color=None, fg_color=WHITE,
@@ -143,36 +173,84 @@ class GameButton(object):
         )
         self.enabled = True
         self.visible = True
-        self.hovered = False
         self.on_click = None
-        self.on_mouse_down = None
         self.user_data = None
+        # animated hover state
+        self.glow = 0.0
+        self.glow_target = 0.0
+        self.lift = 0.0
+        self.lift_target = 0.0
 
     def hit_test(self, pos):
         return self.visible and self.enabled and self.rect.collidepoint(pos)
 
+    def reset_hover(self):
+        self.glow = self.glow_target = 0.0
+        self.lift = self.lift_target = 0.0
+
+    def animate(self, dt):
+        if self.glow != self.glow_target:
+            self.glow = approach(self.glow, self.glow_target, dt, 17)
+            if abs(self.glow - self.glow_target) < 0.004:
+                self.glow = self.glow_target
+        if self.lift != self.lift_target:
+            self.lift = approach(self.lift, self.lift_target, dt, 19)
+            if abs(self.lift - self.lift_target) < 0.004:
+                self.lift = self.lift_target
+
+    # ------------------------------------------------------------------
     def draw(self, surface):
         if not self.visible:
             return
+        if self.lift > 0.015:
+            self._draw_lifted(surface)
+        else:
+            self._paint_face(surface, self.rect.topleft, self.glow)
+
+    def _draw_lifted(self, surface):
+        lift = self.lift
+        w, h = self.rect.w, self.rect.h
+        scale = 1.0 + self.LIFT_SCALE * lift
+        sw = max(1, int(round(w * scale)))
+        sh = max(1, int(round(h * scale)))
+        face = pygame.Surface((w, h), pygame.SRCALPHA)
+        self._paint_face(face, (0, 0), self.glow)
+        if (sw, sh) != (w, h):
+            face = pygame.transform.smoothscale(face, (sw, sh))
+        cx = self.rect.centerx
+        cy = self.rect.centery - int(round(self.LIFT_RISE * lift))
+        if self.bg_color is not None or self.bg_image is not None:
+            shadow = soft_shadow(sw, sh, self.radius,
+                                 alpha=int(150 * lift) + 15)
+            surface.blit(shadow, (cx - shadow.get_width() // 2,
+                                  cy - shadow.get_height() // 2
+                                  + int(self.LIFT_RISE * lift) + 6))
+        surface.blit(face, (cx - sw // 2, cy - sh // 2))
+
+    def _paint_face(self, surface, topleft, glow):
+        x0, y0 = topleft
         r = self.radius
         w, h = self.rect.w, self.rect.h
         if self.bg_color is not None:
             color = self.bg_color
-            if self.hovered and self.enabled:
-                color = _brighten(color, 55)
-            surface.blit(rounded_fill(w, h, color, r), self.rect.topleft)
+            if glow > 0.01 and self.enabled:
+                color = _brighten(color, int(64 * glow))
+            surface.blit(rounded_fill(w, h, color, r), (x0, y0))
         if self.bg_image is not None:
-            surface.blit(self.bg_image, self.rect.topleft)
-            if self.hovered and self.enabled:
-                surface.blit(rounded_tint(w, h, (255, 255, 255), 48, r),
-                             self.rect.topleft)
+            surface.blit(self.bg_image, (x0, y0))
+            if glow > 0.01 and self.enabled:
+                surface.blit(rounded_tint(w, h, WHITE, int(78 * glow), r),
+                             (x0, y0))
         if self.border:
-            border_color = _brighten(BG_COLOR, 40) if self.hovered else BG_COLOR
-            surface.blit(rounded_border(w, h, border_color, r, 1), self.rect.topleft)
+            if glow > 0.01:
+                bcol = lerp_color(BG_COLOR, _brighten(BG_COLOR, 70), glow)
+            else:
+                bcol = BG_COLOR
+            surface.blit(rounded_border(w, h, bcol, r, 1), (x0, y0))
         if self.text and self.font is not None:
-            self._draw_text(surface)
+            self._draw_text(surface, x0, y0)
 
-    def _draw_text(self, surface):
+    def _draw_text(self, surface, ox, oy):
         img = self.font.render(self.text, True, self.fg_color)
         tw, th = img.get_size()
         # pygame.font.Font.render returns a surface with height = ascent+descent,
@@ -181,11 +259,11 @@ class GameButton(object):
         # the descent to put the visual glyph bbox in the cell's center.
         descent_shift = self.font.get_descent() // 2  # get_descent() is negative
         if self.text_align == 'top':
-            x = self.rect.x + (self.rect.w - tw) // 2
-            y = self.rect.y + 2
+            x = ox + (self.rect.w - tw) // 2
+            y = oy + 2
         else:  # center
-            x = self.rect.x + (self.rect.w - tw) // 2
-            y = self.rect.y + (self.rect.h - th) // 2 + descent_shift
+            x = ox + (self.rect.w - tw) // 2
+            y = oy + (self.rect.h - th) // 2 + descent_shift
         surface.blit(img, (x, y))
 
 
