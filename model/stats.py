@@ -14,11 +14,34 @@ _COMPLEXITY_KEY = {20: 'easy', 10: 'normal', 0: 'hard'}
 _IS_WEB = sys.platform == 'emscripten'
 _STORE_KEY = 'einsteingame_stats'
 
+# Par time (seconds) per difficulty — beating it earns the third star.
+_PAR_SECONDS = {20: 80, 10: 150, 0: 250}
+
+
+def _empty_entry():
+    return {'levels': 0, 'best': None, 'best_score': 0, 'best_stars': 0}
+
 
 def _empty():
-    return {'easy': {'levels': 0, 'best': None},
-            'normal': {'levels': 0, 'best': None},
-            'hard': {'levels': 0, 'best': None}}
+    return {'easy': _empty_entry(), 'normal': _empty_entry(),
+            'hard': _empty_entry()}
+
+
+def score_and_stars(complexity, seconds, mistakes):
+    """Rate a finished round. Score rewards speed and a clean run; stars are
+    a 1-3 grade (winning at all is always worth at least one)."""
+    par = _PAR_SECONDS.get(complexity, 150)
+    seconds = max(1, int(seconds))
+    mistakes = max(0, int(mistakes))
+    score = 3000 - int(seconds * 3.0) - mistakes * 450
+    score = max(50, score)
+    if mistakes == 0 and seconds <= par:
+        stars = 3
+    elif mistakes <= 1 and seconds <= par * 2:
+        stars = 2
+    else:
+        stars = 1
+    return score, stars
 
 
 class Stats(object):
@@ -62,6 +85,10 @@ class Stats(object):
             best = entry.get('best')
             if isinstance(best, (int, float)) and best > 0:
                 self._data[key]['best'] = int(best)
+            for fld in ('best_score', 'best_stars'):
+                val = entry.get(fld)
+                if isinstance(val, (int, float)) and val > 0:
+                    self._data[key][fld] = int(val)
 
     def _save(self):
         try:
@@ -76,8 +103,9 @@ class Stats(object):
             pass
 
     # ------------------------------------------------------------------
-    def record_win(self, complexity, seconds):
-        """Count one solved level and keep the fastest time for its mode."""
+    def record_win(self, complexity, seconds, score=0, stars=0):
+        """Count one solved level; keep the fastest time, top score and best
+        star grade for its mode."""
         key = _COMPLEXITY_KEY.get(complexity)
         if key is None:
             return
@@ -86,6 +114,10 @@ class Stats(object):
         seconds = int(seconds)
         if seconds > 0 and (entry['best'] is None or seconds < entry['best']):
             entry['best'] = seconds
+        if int(score) > entry.get('best_score', 0):
+            entry['best_score'] = int(score)
+        if int(stars) > entry.get('best_stars', 0):
+            entry['best_stars'] = int(stars)
         self._save()
 
     def summary(self):

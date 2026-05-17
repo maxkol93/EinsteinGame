@@ -6,13 +6,14 @@ import pygame
 
 from view.buttons import (
     GameButton, RuleButton, FieldButton, color_for_value, apply_palette,
-    rounded_fill, BG_COLOR,
+    rounded_fill, rounded_border, BG_COLOR,
 )
 from view.effects import Effects, Ghost
 from view.palettes import get_palette
 from view.anim import clamp01, ease_out_back, ease_out_cubic, lerp
-from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
-                     draw_text)
+from view.ui import (MenuOverlay, ResultOverlay, TutorialOverlay, TextButton,
+                     make_heart, draw_text)
+from view.decoder import describe_rule
 import view.buttons as buttons_mod
 
 
@@ -23,6 +24,7 @@ CELL_SIDE = 100
 CELL_GAP = 3
 FIELD_COLS = 6
 FIELD_ROWS = 6
+FIELD_CELLS = FIELD_ROWS * FIELD_COLS
 
 # the board itself, gaps included
 FIELD_W = CELL_SIDE * FIELD_COLS + CELL_GAP * (FIELD_COLS - 1)
@@ -173,6 +175,12 @@ class GameWindow(object):
         self._hover_timer = 0.0
         self._propagated = False
         self._lifted_widget = None
+        self._hovered_group = None
+
+        # tooltips + touch
+        self._tooltips_enabled = True
+        self._touch_mode = False
+        self._armed = None       # touch: a tapped-once widget awaiting confirm
 
         self._show_rules_overlay = False
         self._rules_scroll = 0
@@ -192,6 +200,10 @@ class GameWindow(object):
         self.on_mode_select = None
         self.on_open_menu = None
         self.on_volume = None
+        self.on_tooltips = None
+        self.on_touch = None
+        self.on_theme = None
+        self.on_tutorial_done = None
 
         self._build_field_buttons()
         self._build_rules_buttons(list(rules))
@@ -294,6 +306,14 @@ class GameWindow(object):
         """Per-difficulty progress, shown by the menu overlay."""
         self._stats_summary = summary
 
+    def set_tooltips(self, enabled):
+        self._tooltips_enabled = bool(enabled)
+
+    def set_touch(self, enabled):
+        self._touch_mode = bool(enabled)
+        if not enabled:
+            self._armed = None
+
     def set_lives(self, max_lives):
         self._max_lives = max_lives
         self._lives = max_lives
@@ -324,6 +344,7 @@ class GameWindow(object):
         self._play('click')
 
     def disable_buttons(self):
+        self._armed = None
         for row in self._cells:
             for cell in row:
                 if isinstance(cell, list):
@@ -390,27 +411,51 @@ class GameWindow(object):
 
     def open_menu(self):
         self._effects.calm()
+        self._armed = None
         vol = self._sounds.volume if self._sounds else 0.7
         callbacks = {
             'continue': self._menu_continue,
             'restart': lambda: self.on_restart and self.on_restart(),
             'mode': lambda c: self.on_mode_select and self.on_mode_select(c),
-            'rules': self._open_rules_overlay,
+            'tutorial': self.open_tutorial,
             'volume': lambda v: self.on_volume and self.on_volume(v),
             'theme': self._menu_theme,
+            'tooltips': self._menu_tooltips,
+            'touch': self._menu_touch,
         }
         self._overlay = MenuOverlay((CANVAS_WIDTH, CANVAS_HEIGHT),
                                     self._palette, self._ui_fonts,
                                     self._complexity, vol, callbacks,
-                                    stats=self._stats_summary)
+                                    stats=self._stats_summary,
+                                    tooltips=self._tooltips_enabled,
+                                    touch=self._touch_mode)
 
-    def show_win(self):
+    def open_tutorial(self):
+        """Open the paged how-to-play guide (returns to the menu on close)."""
+        self._play('click')
+        self._armed = None
+        self._overlay = TutorialOverlay(
+            (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
+            on_done=lambda: self.on_tutorial_done and self.on_tutorial_done())
+
+    def _menu_tooltips(self, value):
+        self._tooltips_enabled = bool(value)
+        if self.on_tooltips:
+            self.on_tooltips(bool(value))
+
+    def _menu_touch(self, value):
+        self.set_touch(value)
+        if self.on_touch:
+            self.on_touch(bool(value))
+
+    def show_win(self, stars=0, score=0, best_score=0):
         msg = choice(_WIN_MSGS)
         self._overlay = ResultOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             True, msg, self._timer_text,
             {'menu': lambda: self.on_open_menu and self.on_open_menu(),
-             'restart': lambda: self.on_restart and self.on_restart()})
+             'restart': lambda: self.on_restart and self.on_restart()},
+            stars=stars, score=score, best_score=best_score)
         self._effects.celebrate()
 
     def show_lose(self):
@@ -440,6 +485,8 @@ class GameWindow(object):
     def _menu_theme(self):
         self._play('click')
         self._cycle_palette()
+        if self.on_theme:
+            self.on_theme(self._palette_name)
         if isinstance(self._overlay, MenuOverlay):
             self.open_menu()  # rebuild with the new palette
 
@@ -698,13 +745,13 @@ class GameWindow(object):
     # --------------------------- events ------------------------------
 
     def handle_event(self, event):
-        if self._show_rules_overlay:
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                self._close_rules_overlay()
-            elif event.type == pygame.MOUSEWHEEL:
-                self._rules_scroll = max(
-                    0, min(self._img_rules_page.get_height() - CANVAS_HEIGHT + 40,
-                           self._rules_scroll - event.y * 40))
+        # A finger event only flips on touch mode — the actual interaction
+        # rides the synthesised mouse events, so taps are never handled twice.
+        if event.type == getattr(pygame, 'FINGERDOWN', -1):
+            self._note_touch()
+            return
+        if event.type in (getattr(pygame, 'FINGERMOTION', -2),
+                           getattr(pygame, 'FINGERUP', -3)):
             return
 
         if self._overlay is not None and not self._overlay.dead:
@@ -719,17 +766,46 @@ class GameWindow(object):
             for group in self._rules_buttons:
                 for sub in group:
                     if sub.hit_test(pos):
-                        if self.on_rule_click:
-                            self.on_rule_click(sub)
+                        self._activate_rule(sub)
                         return
             for row in self._cells:
                 for cell in row:
                     if isinstance(cell, list):
                         for btn in cell:
                             if btn.hit_test(pos):
-                                if self.on_field_click:
-                                    self.on_field_click(btn)
+                                self._activate_field(btn)
                                 return
+            # a tap on bare board clears any pending touch selection
+            self._armed = None
+
+    def _note_touch(self):
+        """First finger event seen — switch to touch mode and let the
+        presenter persist that choice."""
+        if not self._touch_mode:
+            self._touch_mode = True
+            if self.on_touch:
+                self.on_touch(True)
+
+    def _activate_field(self, btn):
+        # touch mode: the first tap only arms the cell (and shows its
+        # highlight); a second tap on the same cell commits the removal.
+        if self._touch_mode and self._armed is not btn:
+            self._armed = btn
+            return
+        self._armed = None
+        if self.on_field_click:
+            self.on_field_click(btn)
+
+    def _activate_rule(self, sub):
+        if self._touch_mode:
+            same = (isinstance(self._armed, RuleButton)
+                    and self._armed.index == sub.index)
+            if not same:
+                self._armed = sub
+                return
+        self._armed = None
+        if self.on_rule_click:
+            self.on_rule_click(sub)
 
     def _open_rules_overlay(self):
         self._show_rules_overlay = True
@@ -761,7 +837,11 @@ class GameWindow(object):
         if self._overlay is not None:
             self._overlay.update(dt, self._mouse_pos)
             if self._overlay.dead:
+                # closing the tutorial drops the player back to the menu
+                was_tutorial = isinstance(self._overlay, TutorialOverlay)
                 self._overlay = None
+                if was_tutorial:
+                    self.open_menu()
             elif isinstance(self._overlay, ResultOverlay) and self._overlay.won:
                 self._confetti_timer -= dt
                 if self._confetti_timer <= 0.0:
@@ -810,6 +890,7 @@ class GameWindow(object):
             self._hover_timer = 0.0
             self._propagated = False
             self._lifted_widget = None
+            self._hovered_group = None
             return
 
         pos = self._mouse_pos
@@ -886,19 +967,19 @@ class GameWindow(object):
                 big.trigger_hop()
             big.glow_target = 1.0 if glow_on else 0.0
 
-        # the whole hovered rule block lights at once; hovering a field cell
-        # also lights every rule cell that names that value. Rule cells only
-        # glow — they never lift.
-        field_spread = direct_values if propagate else set()
+        # the hovered rule block lights at once; once propagation kicks in
+        # every value in the spread set lights too — field cells and the
+        # matching cells of *other* rules alike. Rule cells never lift.
         for gi, group in enumerate(self._rules_buttons):
             block_lit = gi == hovered_group
             for sub in group:
                 lit = block_lit or (isinstance(sub.value, int)
-                                     and sub.value in field_spread)
+                                     and sub.value in spread)
                 sub.glow_target = 1.0 if lit else 0.0
                 sub.lift_target = 0.0
 
         self._lifted_widget = hovered_field
+        self._hovered_group = hovered_group
 
     def _play(self, key):
         if self._sounds is not None:
@@ -947,6 +1028,8 @@ class GameWindow(object):
 
         self._effects.draw_over(s)
         self._draw_left_panel(s)
+        self._draw_tooltip(s)
+        self._draw_armed(s)
         self._effects.draw_vignette(s)
 
         dx, dy = self._effects.shake_offset()
@@ -1056,6 +1139,9 @@ class GameWindow(object):
                   center=(cx, self.HEARTS_Y - 24))
         self._draw_hearts(surface)
 
+        # how much of the board is solved
+        self._draw_progress(surface)
+
         # good/wrong feedback message
         self._draw_message(surface)
 
@@ -1070,6 +1156,78 @@ class GameWindow(object):
         draw_text(surface, 'L = +life', self._ui_fonts['tiny'],
                   buttons_mod._brighten(self._palette['bg'], 40),
                   center=(cx, CANVAS_HEIGHT - 28))
+
+    PROGRESS_Y = 296
+
+    def _draw_progress(self, surface):
+        """The 'solved N / 36' indicator filling the left panel's mid gap."""
+        muted = buttons_mod._brighten(self._palette['bg'], 64)
+        cx = SIDEBAR_W // 2
+        y = self.PROGRESS_Y
+        draw_text(surface, 'S O L V E D', self._font_label, muted,
+                  center=(cx, y))
+        draw_text(surface, '%d / %d' % (self._defined_cells_count,
+                                        FIELD_CELLS),
+                  self._font_menu, self._palette['text'], center=(cx, y + 26))
+        bw = SIDEBAR_W - 80
+        bx = (SIDEBAR_W - bw) // 2
+        by = y + 44
+        surface.blit(rounded_fill(bw, 6,
+                                  buttons_mod._brighten(self._palette['bg'],
+                                                        26), 3), (bx, by))
+        frac = clamp01(self._defined_cells_count / float(FIELD_CELLS))
+        fw = int(bw * frac)
+        if fw > 0:
+            surface.blit(rounded_fill(fw, 6, self._palette['accent'], 3),
+                         (bx, by))
+
+    def _draw_tooltip(self, surface):
+        """A small plain-language reading of the rule under the cursor."""
+        if (not self._tooltips_enabled or self._hovered_group is None
+                or self._overlay is not None):
+            return
+        group = self._rules_buttons[self._hovered_group]
+        text = describe_rule(tuple(sub.value for sub in group))
+        lines = self._wrap_text(text, self._font_msg, 232)
+        line_h = self._font_msg.get_height()
+        pad_x, pad_y = 14, 9
+        tw = max(self._font_msg.size(ln)[0] for ln in lines)
+        pw, ph = tw + pad_x * 2, line_h * len(lines) + pad_y * 2
+        grect = group[0].rect.union(group[-1].rect)
+        tx = max(8, grect.left - 14 - pw)
+        ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
+        pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        pill.blit(rounded_fill(pw, ph,
+                               buttons_mod._brighten(self._palette['panel'],
+                                                     32), 12), (0, 0))
+        pill.blit(rounded_border(pw, ph,
+                                 buttons_mod._brighten(self._palette['panel'],
+                                                       64), 12, 1), (0, 0))
+        for i, ln in enumerate(lines):
+            img = self._font_msg.render(ln, True, self._palette['text'])
+            pill.blit(img, (pad_x, pad_y + i * line_h))
+        surface.blit(pill, (tx, ty))
+
+    def _draw_armed(self, surface):
+        """Touch mode: ring the tapped-once widget and prompt to confirm."""
+        if not self._touch_mode or self._armed is None:
+            return
+        r = self._armed.rect
+        p = 0.5 + 0.5 * math.sin(self._clock * 6.0)
+        ring = r.inflate(10 + 5 * p, 10 + 5 * p)
+        surface.blit(rounded_border(ring.w, ring.h, self._palette['accent'],
+                                    max(6, ring.h // 4), 3), ring.topleft)
+        img = self._font_label.render('tap again to confirm', True,
+                                      self._palette['text'])
+        pw, ph = img.get_width() + 16, img.get_height() + 8
+        pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        pill.blit(rounded_fill(pw, ph,
+                               buttons_mod._brighten(self._palette['panel'],
+                                                     36), ph // 2), (0, 0))
+        pill.blit(img, (8, 4))
+        px = max(4, min(CANVAS_WIDTH - pw - 4, r.centerx - pw // 2))
+        py = max(4, r.top - ph - 10)
+        surface.blit(pill, (px, py))
 
     def _draw_hearts(self, surface):
         react = self._hearts_react / 0.5

@@ -9,7 +9,11 @@ from view.sounds import SoundManager
 from view.palettes import get_palette
 from model.field_and_rules import FieldAndRules
 from model.timer import Timer
-from model.stats import Stats
+from model.stats import Stats, score_and_stars
+from model.settings import Settings
+
+
+_COMPLEXITY_KEY = {20: 'easy', 10: 'normal', 0: 'hard'}
 
 
 # screen states
@@ -37,9 +41,11 @@ class Game(object):
         self._loading = None
         self._screen = None
         self._stats = None
+        self._settings = None
 
         self._state = LOADING
         self._complexity = 20
+        self._mistakes = 0
         try:
             self._max_lives = max(1, int(os.environ.get('EINSTEIN_LIVES',
                                                         DEFAULT_LIVES)))
@@ -61,6 +67,8 @@ class Game(object):
 
         self._sounds = SoundManager()
         self._stats = Stats()
+        self._settings = Settings()
+        self._apply_settings()
         self._loading = LoadingScreen(_FONTS_DIR,
                                       get_palette(self._palette_name))
 
@@ -88,16 +96,31 @@ class Game(object):
             pygame.display.flip()
             await asyncio.sleep(0)
 
+    def _apply_settings(self):
+        """Pull saved preferences into the live game state."""
+        s = self._settings
+        if s is None:
+            return
+        self._palette_name = s.get('palette')
+        self._complexity = s.get('complexity')
+        if self._sounds is not None:
+            self._sounds.set_volume(s.get('volume'))
+
     # ------------------------- round lifecycle ------------------------
 
     def _enter_game(self):
         self._init_round(self._complexity)
         self._view.open_menu()
         self._state = MENU
+        # first ever launch — walk the player through the tutorial
+        if self._settings is not None and not self._settings.get(
+                'tutorial_seen'):
+            self._view.open_tutorial()
 
     def _init_round(self, complexity):
         self._complexity = complexity
         self._lives = self._max_lives
+        self._mistakes = 0
         self._model = FieldAndRules(complexity)
         displayable_rules = self._model.rules[
             self._model.defined_start_cells_count:]
@@ -116,6 +139,13 @@ class Game(object):
         self._view.on_mode_select = self._on_mode_select
         self._view.on_open_menu = self._on_open_menu
         self._view.on_volume = self._on_volume
+        self._view.on_tooltips = self._on_tooltips
+        self._view.on_touch = self._on_touch
+        self._view.on_theme = self._on_theme
+        self._view.on_tutorial_done = self._on_tutorial_done
+        if self._settings is not None:
+            self._view.set_tooltips(self._settings.get('tooltips'))
+            self._view.set_touch(self._settings.get('touch'))
         self._timer = Timer(self._view.timer_update, self._on_game_over)
         self._timer.start()
         self._play('start')
@@ -172,6 +202,7 @@ class Game(object):
         # player wrongly removed the correct candidate.
         if self._model[btn.y][btn.x] == btn.n:
             self._lives -= 1
+            self._mistakes += 1
             self._view.wrong_feedback(btn)
             self._view.damage_life()
             self._play('wrong')
@@ -193,10 +224,19 @@ class Game(object):
         self._timer.stop_timer()  # fires _on_game_over -> disables the board
         if won:
             self._state = WIN
+            seconds = self._timer.value
+            score, stars = score_and_stars(self._complexity, seconds,
+                                           self._mistakes)
+            best_score = score
             if self._stats is not None:
-                self._stats.record_win(self._complexity, self._timer.value)
+                self._stats.record_win(self._complexity, seconds, score,
+                                       stars)
+                key = _COMPLEXITY_KEY.get(self._complexity, 'normal')
+                best_score = self._stats.summary().get(key, {}).get(
+                    'best_score', score)
             self._view.set_timer_mood(True)
-            self._view.show_win()
+            self._view.show_win(stars=stars, score=score,
+                                best_score=best_score)
             self._play('win')
         else:
             self._state = LOSE
@@ -219,6 +259,8 @@ class Game(object):
         self._complexity = complexity
         if self._view is not None:
             self._view.change_complexity(complexity)
+        if self._settings is not None:
+            self._settings.set('complexity', complexity)
 
     def _on_open_menu(self):
         self._open_menu()
@@ -226,6 +268,25 @@ class Game(object):
     def _on_volume(self, value):
         if self._sounds is not None:
             self._sounds.set_volume(value)
+        if self._settings is not None:
+            self._settings.set('volume', float(value))
+
+    def _on_tooltips(self, enabled):
+        if self._settings is not None:
+            self._settings.set('tooltips', bool(enabled))
+
+    def _on_touch(self, enabled):
+        if self._settings is not None:
+            self._settings.set('touch', bool(enabled))
+
+    def _on_theme(self, palette_name):
+        self._palette_name = palette_name
+        if self._settings is not None:
+            self._settings.set('palette', palette_name)
+
+    def _on_tutorial_done(self):
+        if self._settings is not None:
+            self._settings.set('tutorial_seen', True)
 
     # ----------------------------- util -------------------------------
 
