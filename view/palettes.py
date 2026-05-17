@@ -16,12 +16,12 @@ PALETTES = {
         'text': (245, 240, 236),
         'accent': (205, 195, 190),
         'rows': {
-            1: (200, 137, 142),   # dusty rose
-            2: (197, 123, 90),    # terracotta clay
-            3: (197, 163, 87),    # mustard gold
-            4: (143, 163, 122),   # sage olive
-            5: (110, 138, 141),   # cold sage-teal
-            6: (128, 97, 116),    # plum mocha
+            1: (168, 115, 119),   # dusty rose
+            2: (165, 103, 76),    # terracotta clay
+            3: (165, 137, 73),    # mustard gold
+            4: (120, 137, 102),   # sage olive
+            5: (92, 116, 118),    # cold sage-teal
+            6: (108, 81, 97),     # plum mocha
         },
     },
     'nord': {
@@ -31,12 +31,12 @@ PALETTES = {
         'text': (236, 239, 244),
         'accent': (180, 190, 210),
         'rows': {
-            1: (191, 97, 106),    # aurora red
-            2: (208, 135, 112),   # aurora orange
-            3: (235, 203, 139),   # snow yellow
-            4: (163, 190, 140),   # frost green
-            5: (94, 129, 172),    # frost blue
-            6: (180, 142, 173),   # aurora purple
+            1: (160, 81, 89),     # aurora red
+            2: (175, 113, 94),    # aurora orange
+            3: (197, 171, 117),   # snow yellow
+            4: (137, 160, 118),   # frost green
+            5: (79, 108, 144),    # frost blue
+            6: (151, 119, 145),   # aurora purple
         },
     },
     'sunset': {
@@ -46,12 +46,12 @@ PALETTES = {
         'text': (245, 240, 240),
         'accent': (210, 180, 200),
         'rows': {
-            1: (231, 111, 81),    # coral
-            2: (244, 162, 97),    # peach
-            3: (233, 196, 106),   # wheat gold
-            4: (138, 177, 167),   # sage
-            5: (98, 122, 167),    # slate blue
-            6: (114, 80, 124),    # plum
+            1: (194, 93, 68),     # coral
+            2: (205, 136, 81),    # peach
+            3: (196, 165, 89),    # wheat gold
+            4: (116, 149, 140),   # sage
+            5: (82, 102, 140),    # slate blue
+            6: (96, 67, 104),     # plum
         },
     },
 }

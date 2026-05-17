@@ -23,6 +23,11 @@ def _brighten(color, amount):
     return tuple(max(0, min(255, c + amount)) for c in color[:3])
 
 
+def _fmt_time(seconds):
+    seconds = max(0, int(seconds))
+    return '%02d:%02d' % (seconds // 60, seconds % 60)
+
+
 _PANEL_SHADOW_CACHE = {}
 
 
@@ -525,11 +530,12 @@ class MenuOverlay(_Overlay):
     """Main menu: continue, restart, difficulty, rules, volume, theme."""
 
     PANEL_W = 432
-    PANEL_H = 582
+    PANEL_H = 612
 
     def __init__(self, screen_size, palette, fonts, complexity, volume,
-                 callbacks):
+                 callbacks, stats=None):
         super().__init__(screen_size, palette)
+        self._stats = stats
         self.fonts = fonts
         self._cb = callbacks
         self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
@@ -577,6 +583,8 @@ class MenuOverlay(_Overlay):
             self.btn_base, self.text_color, on_click=callbacks.get('theme'),
             radius=12)
 
+        self._stats_y = y + 46 + 24
+
         self.widgets = [self.btn_continue, self.btn_restart, self.segmented,
                         self.slider, self.btn_rules, self.btn_theme]
         self._panel_bg = self._build_bg()
@@ -594,6 +602,26 @@ class MenuOverlay(_Overlay):
                   topleft=(30, self._mode_label_y))
         draw_text(surf, 'VOLUME', self.fonts['tiny'], self.muted,
                   topleft=(30, self._vol_label_y))
+
+        # progress — levels solved and the best time, per difficulty
+        sy = self._stats_y
+        draw_text(surf, 'PROGRESS', self.fonts['tiny'], self.muted,
+                  topleft=(30, sy))
+        ry = sy + 25
+        for label, key in (('Easy', 'easy'), ('Normal', 'normal'),
+                           ('Hard', 'hard')):
+            entry = (self._stats or {}).get(key) or {}
+            levels = entry.get('levels', 0)
+            best = entry.get('best')
+            draw_text(surf, label, self.fonts['small'], self.text_color,
+                      topleft=(30, ry))
+            draw_text(surf, '%d solved' % levels, self.fonts['small'],
+                      self.muted, center=(cx + 8, ry + 9))
+            best_txt = _fmt_time(best) if best else '--:--'
+            bw = self.fonts['small'].size(best_txt)[0]
+            draw_text(surf, best_txt, self.fonts['small'], self.accent,
+                      topleft=(self.PANEL_W - 30 - bw, ry))
+            ry += 26
         return surf
 
     def update(self, dt, mouse_pos):

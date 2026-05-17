@@ -9,6 +9,7 @@ from view.sounds import SoundManager
 from view.palettes import get_palette
 from model.field_and_rules import FieldAndRules
 from model.timer import Timer
+from model.stats import Stats
 
 
 # screen states
@@ -35,6 +36,7 @@ class Game(object):
         self._sounds = None
         self._loading = None
         self._screen = None
+        self._stats = None
 
         self._state = LOADING
         self._complexity = 20
@@ -46,7 +48,6 @@ class Game(object):
         self._lives = self._max_lives
 
         self._pending_restart = False
-        self._pending_complexity = None
         self._running = True
 
     # ------------------------------------------------------------------
@@ -59,6 +60,7 @@ class Game(object):
         pygame.display.set_caption('Einstein game')
 
         self._sounds = SoundManager()
+        self._stats = Stats()
         self._loading = LoadingScreen(_FONTS_DIR,
                                       get_palette(self._palette_name))
 
@@ -105,6 +107,8 @@ class Game(object):
         self._view.change_complexity(complexity)
         self._view.define_start_cells(self._model.defined_start_cells)
         self._view.set_lives(self._max_lives)
+        if self._stats is not None:
+            self._view.set_stats(self._stats.summary())
         self._view.on_field_click = self._on_field_click
         self._view.on_rule_click = self._on_rule_click
         self._view.on_continue = self._on_continue
@@ -124,11 +128,6 @@ class Game(object):
         if self._pending_restart:
             self._pending_restart = False
             self._init_round(self._complexity)
-            self._state = PLAYING
-        elif self._pending_complexity is not None:
-            nxt = self._pending_complexity
-            self._pending_complexity = None
-            self._init_round(nxt)
             self._state = PLAYING
 
     # ---------------------------- input -------------------------------
@@ -154,6 +153,8 @@ class Game(object):
 
     def _open_menu(self):
         self._state = MENU
+        if self._stats is not None and self._view is not None:
+            self._view.set_stats(self._stats.summary())
         self._view.open_menu()
 
     def _debug_add_life(self):
@@ -192,6 +193,8 @@ class Game(object):
         self._timer.stop_timer()  # fires _on_game_over -> disables the board
         if won:
             self._state = WIN
+            if self._stats is not None:
+                self._stats.record_win(self._complexity, self._timer.value)
             self._view.set_timer_mood(True)
             self._view.show_win()
             self._play('win')
@@ -211,8 +214,11 @@ class Game(object):
         self._pending_restart = True
 
     def _on_mode_select(self, complexity):
+        # Only switch the selected mode — do not start a game. The new field
+        # is generated on the next Restart.
         self._complexity = complexity
-        self._pending_complexity = complexity
+        if self._view is not None:
+            self._view.change_complexity(complexity)
 
     def _on_open_menu(self):
         self._open_menu()

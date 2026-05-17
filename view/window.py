@@ -16,27 +16,33 @@ from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
 import view.buttons as buttons_mod
 
 
-# Layout constants. A fixed sidebar sits left of the board; because every
-# field/rule coordinate is derived from INDENT_LEFT (directly or via
-# FIELD_WIDTH), widening the left indent shifts the whole board + rules right
-# and frees x in [0, SIDEBAR_W] for the sidebar.
+# Layout constants. The window is three columns: a left panel (timer + lives),
+# the 6x6 board, and a right panel (rules). Both side panels share one width
+# and the board is framed by an identical margin on every side.
 CELL_SIDE = 100
-SIDEBAR_W = 120
-INDENT_LEFT = SIDEBAR_W + 10
-INDENT_TOP = 70
-INDENT_BOTTOM = 10
 CELL_GAP = 3
 FIELD_COLS = 6
 FIELD_ROWS = 6
 
-FIELD_WIDTH = INDENT_LEFT + CELL_SIDE * FIELD_COLS + 25
-FIELD_HEIGHT = INDENT_TOP + CELL_SIDE * FIELD_ROWS + (FIELD_ROWS - 1) * CELL_GAP + INDENT_BOTTOM + 33
+# the board itself, gaps included
+FIELD_W = CELL_SIDE * FIELD_COLS + CELL_GAP * (FIELD_COLS - 1)
+FIELD_H = CELL_SIDE * FIELD_ROWS + CELL_GAP * (FIELD_ROWS - 1)
 
-# Worst-case window size accommodates up to 2 columns of rule buttons
-CANVAS_WIDTH = FIELD_WIDTH + 10 + 145 * 2 + 10
-CANVAS_HEIGHT = FIELD_HEIGHT
+PANEL_W = 280          # the left and the right panel share one width
+MARGIN = 60            # uniform gap framing the board on every side
+SIDEBAR_W = PANEL_W    # left-panel width (name kept for the sidebar code)
 
-HOVER_PROPAGATE_DELAY = 0.5  # seconds before a hover fans out to twins
+INDENT_LEFT = PANEL_W + MARGIN          # board origin x
+INDENT_TOP = MARGIN                     # board origin y
+
+RULES_PANEL_W = PANEL_W
+RULES_PANEL_X = INDENT_LEFT + FIELD_W + MARGIN   # right panel origin x
+RULES_TOP = 54                          # first rule row, y inside the panel
+
+CANVAS_WIDTH = PANEL_W + MARGIN + FIELD_W + MARGIN + PANEL_W
+CANVAS_HEIGHT = MARGIN + FIELD_H + MARGIN
+
+HOVER_PROPAGATE_DELAY = 0.2  # seconds before a hover fans out to linked cells
 
 _LOOSE_MSGS = [
     "don't worry and try again!",
@@ -73,19 +79,44 @@ _WIN_MSGS = [
 ]
 
 
+# 4x4 ordered-dither matrix. The big-cell gradient spans only ~65 shade
+# steps across 100 px, which plain truncation renders as visible horizontal
+# bands; dithering scatters the rounding so the gradient reads as smooth.
+_BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+
+
 def _make_gradient_surface(size, base, top_factor=1.30, bottom_factor=0.65,
                            radius=14):
-    """Vertical gradient surface used as big-cell background, palette-driven."""
+    """Vertical gradient used as a big-cell background. Ordered dithering
+    keeps the shallow gradient band-free; a soft highlight near the top fakes
+    a light source without the hard 1 px stripe a plain line would leave."""
     from view.buttons import mask_to_round
     w, h = size
     raw = pygame.Surface((w, h))
+    sheen_y = h * 0.22
+    sheen_spread = max(1.0, h * 0.11)
+    # one dithered colour per (row, x-phase); 4 phases span the Bayer width
+    variants = []
     for y in range(h):
         t = y / max(1, h - 1)
         f = top_factor + (bottom_factor - top_factor) * t
-        c = tuple(max(0, min(255, int(ch * f))) for ch in base)
-        pygame.draw.line(raw, c, (0, y), (w, y))
-    sheen = tuple(min(255, ch + 28) for ch in base)
-    pygame.draw.line(raw, sheen, (0, int(h * 0.22)), (w, int(h * 0.22)))
+        s = max(0.0, 1.0 - abs(y - sheen_y) / sheen_spread)
+        s = s * s * 24.0                       # soft highlight band
+        fc = [ch * f + s for ch in base]
+        brow = _BAYER4[y & 3]
+        variants.append([
+            tuple(max(0, min(255, int(ch + (brow[p] + 0.5) / 16.0 - 0.5)))
+                  for ch in fc)
+            for p in range(4)
+        ])
+    pa = pygame.PixelArray(raw)
+    for x in range(w):
+        phase = x & 3
+        column = pa[x]
+        for y in range(h):
+            column[y] = variants[y][phase]
+        del column          # release the sub-view so the surface unlocks
+    del pa
     return mask_to_round(raw, radius)
 
 
@@ -138,7 +169,7 @@ class GameWindow(object):
         self._hearts_react = 0.0
 
         # hover-propagation state
-        self._hover_values = frozenset()
+        self._hover_sig = None
         self._hover_timer = 0.0
         self._propagated = False
         self._lifted_widget = None
@@ -147,6 +178,11 @@ class GameWindow(object):
         self._rules_scroll = 0
         self._overlay = None       # MenuOverlay / ResultOverlay
         self._confetti_timer = 0.0
+        self._stats_summary = None
+
+        # cells resolved together by one click pop in as a cascade: each is
+        # collected here, then flushed with a staggered delay
+        self._batch_big = []
 
         # Handler hooks (presenter registers these)
         self.on_field_click = None
@@ -160,7 +196,8 @@ class GameWindow(object):
         self._build_field_buttons()
         self._build_rules_buttons(list(rules))
         self._build_sidebar()
-        self._sidebar_strip = self._make_sidebar_shadow()
+        self._sidebar_strip = self._make_shadow_strip(dark_on_right=False)
+        self._rules_strip = self._make_shadow_strip(dark_on_right=True)
 
     # --------------------------- loading -----------------------------
 
@@ -219,10 +256,14 @@ class GameWindow(object):
         rules.sort(key=lambda r: (1, r[1]) if isinstance(r[1], str) else (0, r[1]),
                    reverse=True)
         mini = (CELL_SIDE + 15) // 3
+        rule_w = mini * 3
+        col_gap = 16
+        pad_x = (RULES_PANEL_W - 2 * rule_w - col_gap) // 2
+        row_h = mini + 9
         for i, rule in enumerate(rules):
             ty, tx = i % 14, i // 14
-            group_x = FIELD_WIDTH + 17 + tx * (mini * 3 + 30)
-            group_y = 10 + ty * (mini + 9)
+            group_x = RULES_PANEL_X + pad_x + tx * (rule_w + col_gap)
+            group_y = RULES_TOP + ty * row_h
             b1 = RuleButton(i, rule[0], (group_x, group_y, mini, mini), self._font_rule)
             b2 = RuleButton(i, rule[1], (group_x + mini, group_y, mini, mini), self._font_rule)
             b3 = RuleButton(i, rule[2], (group_x + 2 * mini, group_y, mini, mini), self._font_rule)
@@ -231,14 +272,16 @@ class GameWindow(object):
     def _build_sidebar(self):
         base = buttons_mod._brighten(self._palette['panel'], 44)
         self._menu_button = TextButton(
-            (16, 20, SIDEBAR_W - 32, 46), 'MENU', self._font_menu,
+            (24, 22, SIDEBAR_W - 48, 48), 'MENU', self._font_menu,
             base, self._palette['text'], on_click=self._request_menu,
             radius=12, accent=buttons_mod._brighten(self._palette['panel'], 70))
 
-    def _make_sidebar_shadow(self):
+    def _make_shadow_strip(self, dark_on_right):
+        """A 16px soft shadow strip cast by a panel onto the board area."""
         strip = pygame.Surface((16, CANVAS_HEIGHT), pygame.SRCALPHA)
         for i in range(16):
-            a = int(70 * (1 - i / 16) ** 2)
+            f = (i / 16.0) if dark_on_right else (1.0 - i / 16.0)
+            a = int(70 * f ** 2)
             pygame.draw.line(strip, (0, 0, 0, a), (i, 0), (i, CANVAS_HEIGHT))
         return strip
 
@@ -246,6 +289,10 @@ class GameWindow(object):
 
     def change_complexity(self, complexity):
         self._complexity = complexity
+
+    def set_stats(self, summary):
+        """Per-difficulty progress, shown by the menu overlay."""
+        self._stats_summary = summary
 
     def set_lives(self, max_lives):
         self._max_lives = max_lives
@@ -354,7 +401,8 @@ class GameWindow(object):
         }
         self._overlay = MenuOverlay((CANVAS_WIDTH, CANVAS_HEIGHT),
                                     self._palette, self._ui_fonts,
-                                    self._complexity, vol, callbacks)
+                                    self._complexity, vol, callbacks,
+                                    stats=self._stats_summary)
 
     def show_win(self):
         msg = choice(_WIN_MSGS)
@@ -411,6 +459,9 @@ class GameWindow(object):
             self._create_big_button(cur_y, cur_x, last.n)
             self._remove_all_in_row(cur_y, last.n)
         self._check_last_in_row(cur_y, cur_n)
+        # one click can resolve several cells at once — pop them in as a
+        # cascade rather than all in the same frame
+        self._flush_big_batch()
 
     def _remove_all_in_row(self, row, number):
         for x, cell in enumerate(self._cells[row]):
@@ -470,10 +521,26 @@ class GameWindow(object):
         self._big_cells[(y, x)] = btn
         self._cells[y][x] = None
         if not getattr(self, '_suppress_effects', False):
+            # deferred: remove_button flushes the whole batch as a cascade
+            self._batch_big.append(btn)
+
+    BIG_CASCADE_STEP = 0.11   # gap between consecutive big-cell pops
+
+    def _flush_big_batch(self):
+        """Fire the pop for every big cell created during this click, each
+        offset a little later than the last so they cascade in."""
+        batch = self._batch_big
+        self._batch_big = []
+        if not batch:
+            return
+        step = self.BIG_CASCADE_STEP if len(batch) > 1 else 0.0
+        for i, btn in enumerate(batch):
             snap = self._snapshot_button(btn)
-            burst_color = color_for_value(n) or (220, 220, 220)
-            self._effects.big_pop(btn, burst_color, snap)
-            self._play('solve')
+            burst_color = color_for_value(btn.n) or (220, 220, 220)
+            self._effects.big_pop(btn, burst_color, snap, delay=i * step)
+        # one solve sound per click: overlapping copies of the long solve
+        # sample would just stack into mush (and clip the mix)
+        self._play('solve')
 
     def _snapshot_button(self, button):
         snap = pygame.Surface(button.rect.size, pygame.SRCALPHA)
@@ -739,61 +806,99 @@ class GameWindow(object):
                 sub.glow_target = sub.lift_target = 0.0
             for big in self._big_buttons:
                 big.glow_target = 0.0
-            self._hover_values = frozenset()
+            self._hover_sig = None
             self._hover_timer = 0.0
             self._propagated = False
             self._lifted_widget = None
             return
 
         pos = self._mouse_pos
-        direct = set()
-        lifted = None
+
+        # what is directly under the cursor
+        hovered_field = None
+        hovered_big = None
+        hovered_group = None
         for btn in self._iter_field_buttons():
             if btn.hit_test(pos):
-                direct.add(btn.n)
-                lifted = btn
-        for sub in self._iter_rule_buttons():
-            if sub.hit_test(pos):
-                direct.add(sub.value)
-                lifted = sub
+                hovered_field = btn
         for big in self._big_buttons:
             if big.hit_test(pos):
-                direct.add(big.n)
+                hovered_big = big
+        for gi, group in enumerate(self._rules_buttons):
+            if any(sub.hit_test(pos) for sub in group):
+                hovered_group = gi
+                break
 
-        cur = frozenset(direct)
-        if cur and cur == self._hover_values:
+        # the field values a hovered rule block points at. Markers ("^",
+        # "<->", "...") are strings — they describe layout, not a cell, so
+        # they never light up the board.
+        rule_values = set()
+        if hovered_group is not None:
+            for sub in self._rules_buttons[hovered_group]:
+                if isinstance(sub.value, int):
+                    rule_values.add(sub.value)
+
+        direct_values = set()
+        if hovered_field is not None:
+            direct_values.add(hovered_field.n)
+        if hovered_big is not None:
+            direct_values.add(hovered_big.n)
+
+        sig = (frozenset(direct_values), frozenset(rule_values), hovered_group)
+        active = bool(direct_values) or hovered_group is not None
+        if active and sig == self._hover_sig:
             self._hover_timer += dt
-        elif cur:
-            self._hover_values = cur
+        elif active:
+            self._hover_sig = sig
             self._hover_timer = 0.0
             self._propagated = False
             self._play('hover')
         else:
-            self._hover_values = frozenset()
+            self._hover_sig = None
             self._hover_timer = 0.0
             self._propagated = False
 
-        propagate = self._hover_timer >= HOVER_PROPAGATE_DELAY
+        propagate = active and self._hover_timer >= HOVER_PROPAGATE_DELAY
         if propagate and not self._propagated:
             self._propagated = True
             self._play('spread')
 
-        for btn in self._iter_field_buttons():
-            is_direct = btn.hit_test(pos)
-            is_prop = propagate and btn.n in direct
-            btn.glow_target = 1.0 if (is_direct or is_prop) else 0.0
-            btn.lift_target = 1.0 if is_direct else 0.0
-        for sub in self._iter_rule_buttons():
-            is_direct = sub.hit_test(pos)
-            is_prop = propagate and sub.value in direct
-            sub.glow_target = 1.0 if (is_direct or is_prop) else 0.0
-            sub.lift_target = 1.0 if is_direct else 0.0
-        for big in self._big_buttons:
-            is_direct = big.hit_test(pos)
-            is_prop = propagate and getattr(big, 'n', None) in direct
-            big.glow_target = 1.0 if (is_direct or is_prop) else 0.0
+        # values that light up across the board once propagation kicks in:
+        # twins of the hovered cell, and every cell named by the hovered rule
+        spread = set()
+        if propagate:
+            spread |= direct_values
+            spread |= rule_values
 
-        self._lifted_widget = lifted
+        for btn in self._iter_field_buttons():
+            is_direct = btn is hovered_field
+            glow_on = is_direct or btn.n in spread
+            # a one-shot jump when a cell lights up without being hovered
+            if glow_on and not is_direct and btn.glow_target < 0.5:
+                btn.trigger_hop()
+            btn.glow_target = 1.0 if glow_on else 0.0
+            btn.lift_target = 1.0 if is_direct else 0.0
+
+        for big in self._big_buttons:
+            is_direct = big is hovered_big
+            glow_on = is_direct or big.n in spread
+            if glow_on and not is_direct and big.glow_target < 0.5:
+                big.trigger_hop()
+            big.glow_target = 1.0 if glow_on else 0.0
+
+        # the whole hovered rule block lights at once; hovering a field cell
+        # also lights every rule cell that names that value. Rule cells only
+        # glow — they never lift.
+        field_spread = direct_values if propagate else set()
+        for gi, group in enumerate(self._rules_buttons):
+            block_lit = gi == hovered_group
+            for sub in group:
+                lit = block_lit or (isinstance(sub.value, int)
+                                     and sub.value in field_spread)
+                sub.glow_target = 1.0 if lit else 0.0
+                sub.lift_target = 0.0
+
+        self._lifted_widget = hovered_field
 
     def _play(self, key):
         if self._sounds is not None:
@@ -804,6 +909,7 @@ class GameWindow(object):
     def draw(self):
         s = self._scene
         s.fill(buttons_mod.BG_COLOR)
+        self._draw_rules_panel(s)   # right-panel backing, beneath the rules
 
         # Soft ghost outlines so the big-cell grid stays readable.
         bg = buttons_mod.BG_COLOR
@@ -839,9 +945,8 @@ class GameWindow(object):
         if self._lifted_widget is not None:
             self._lifted_widget.draw(s)
 
-        self._draw_message(s)
         self._effects.draw_over(s)
-        self._draw_sidebar(s)
+        self._draw_left_panel(s)
         self._effects.draw_vignette(s)
 
         dx, dy = self._effects.shake_offset()
@@ -854,30 +959,51 @@ class GameWindow(object):
             self._draw_rules_overlay(self.surface)
 
     def _draw_message(self, surface):
+        """The good/wrong feedback pill, shown inside the left panel."""
         if not self._result_text:
             return
         a = clamp01(self._msg_anim)
-        img = self._font_msg.render(self._result_text, True,
-                                    self._palette['text'])
-        pw, ph = img.get_width() + 38, img.get_height() + 16
+        lines = self._wrap_text(self._result_text, self._font_msg,
+                                SIDEBAR_W - 96)
+        imgs = [self._font_msg.render(ln, True, self._palette['text'])
+                for ln in lines]
+        line_h = self._font_msg.get_height()
+        tw = max(im.get_width() for im in imgs)
+        pw, ph = tw + 34, line_h * len(imgs) + 22
         pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
-        pill.blit(rounded_fill(pw, ph, buttons_mod._brighten(BG_COLOR, 17),
-                               ph // 2), (0, 0))
-        pill.blit(img, ((pw - img.get_width()) // 2,
-                        (ph - img.get_height()) // 2))
-        scale = lerp(0.72, 1.0, ease_out_back(a))
+        pill.blit(rounded_fill(pw, ph,
+                               buttons_mod._brighten(self._palette['bg'], 30),
+                               14), (0, 0))
+        for i, im in enumerate(imgs):
+            pill.blit(im, ((pw - im.get_width()) // 2, 11 + i * line_h))
+        scale = lerp(0.74, 1.0, ease_out_back(a))
         sw, sh = max(1, int(pw * scale)), max(1, int(ph * scale))
         pill = pygame.transform.smoothscale(pill, (sw, sh))
         pill.set_alpha(int(255 * a))
-        cx = INDENT_LEFT + (CELL_SIDE * FIELD_COLS + (FIELD_COLS - 1) * CELL_GAP) // 2
-        surface.blit(pill, (cx - sw // 2, 36 - sh // 2))
+        cx = SIDEBAR_W // 2
+        surface.blit(pill, (cx - sw // 2, self.MSG_CENTER_Y - sh // 2))
 
-    # --------------------------- sidebar -----------------------------
+    @staticmethod
+    def _wrap_text(text, font, max_w):
+        lines, cur = [], ''
+        for word in str(text).split():
+            trial = (cur + ' ' + word).strip()
+            if not cur or font.size(trial)[0] <= max_w:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = word
+        if cur:
+            lines.append(cur)
+        return lines or ['']
+
+    # --------------------------- panels ------------------------------
 
     HEART_SIZE = 26
     HEART_GAP = 8
     HEARTS_PER_ROW = 3
-    HEARTS_Y = 196
+    HEARTS_Y = 220
+    MSG_CENTER_Y = 372
 
     def _heart_pos(self, i):
         per = self.HEARTS_PER_ROW
@@ -892,7 +1018,21 @@ class GameWindow(object):
     def _complexity_name(self):
         return {20: 'EASY', 10: 'NORMAL', 0: 'HARD'}.get(self._complexity, '—')
 
-    def _draw_sidebar(self, surface):
+    def _draw_rules_panel(self, surface):
+        """Right-panel backing — mirrors the left panel. Drawn before the rule
+        buttons so they sit on top of it."""
+        panel = buttons_mod._brighten(self._palette['bg'], 13)
+        pygame.draw.rect(surface, panel,
+                         (RULES_PANEL_X, 0, RULES_PANEL_W, CANVAS_HEIGHT))
+        pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
+                         (RULES_PANEL_X, 0), (RULES_PANEL_X, CANVAS_HEIGHT))
+        surface.blit(self._rules_strip, (RULES_PANEL_X - 16, 0))
+        muted = buttons_mod._brighten(self._palette['bg'], 64)
+        cx = RULES_PANEL_X + RULES_PANEL_W // 2
+        draw_text(surface, 'C L U E S', self._font_label, muted,
+                  center=(cx, 30))
+
+    def _draw_left_panel(self, surface):
         panel = buttons_mod._brighten(self._palette['bg'], 13)
         pygame.draw.rect(surface, panel, (0, 0, SIDEBAR_W, CANVAS_HEIGHT))
         pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
@@ -907,26 +1047,29 @@ class GameWindow(object):
 
         # timer
         draw_text(surface, 'T I M E', self._font_label, muted,
-                  center=(cx, 92))
+                  center=(cx, 104))
         draw_text(surface, self._timer_text, self._font_timer,
-                  self._timer_color, center=(cx, 122))
+                  self._timer_color, center=(cx, 140))
 
         # lives
         draw_text(surface, 'L I V E S', self._font_label, muted,
-                  center=(cx, self.HEARTS_Y - 28))
+                  center=(cx, self.HEARTS_Y - 24))
         self._draw_hearts(surface)
+
+        # good/wrong feedback message
+        self._draw_message(surface)
 
         # footer: difficulty + debug hint
         pygame.draw.line(surface, buttons_mod._brighten(panel, 22),
-                         (18, CANVAS_HEIGHT - 92),
-                         (SIDEBAR_W - 18, CANVAS_HEIGHT - 92))
+                         (24, CANVAS_HEIGHT - 104),
+                         (SIDEBAR_W - 24, CANVAS_HEIGHT - 104))
         draw_text(surface, 'MODE', self._font_label, muted,
-                  center=(cx, CANVAS_HEIGHT - 72))
+                  center=(cx, CANVAS_HEIGHT - 82))
         draw_text(surface, self._complexity_name(), self._font_menu, text,
-                  center=(cx, CANVAS_HEIGHT - 52))
+                  center=(cx, CANVAS_HEIGHT - 58))
         draw_text(surface, 'L = +life', self._ui_fonts['tiny'],
                   buttons_mod._brighten(self._palette['bg'], 40),
-                  center=(cx, CANVAS_HEIGHT - 22))
+                  center=(cx, CANVAS_HEIGHT - 28))
 
     def _draw_hearts(self, surface):
         react = self._hearts_react / 0.5

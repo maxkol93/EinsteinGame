@@ -15,15 +15,17 @@ _SOUND_KEYS = ['hover', 'spread', 'click', 'pick', 'solve', 'wrong',
                'win', 'lose', 'start']
 
 # Per-sound trim so one master volume slider stays musically balanced.
+# Tuned against the normalised SFX bank (every file peaks at -3 dBFS), so
+# these set the *mix*: subtle UI ticks, prominent game events.
 _SOUND_GAIN = {
-    'hover': 0.32, 'spread': 0.30, 'click': 0.70, 'pick': 0.62,
-    'solve': 0.95, 'wrong': 0.85, 'win': 1.0, 'lose': 1.0, 'start': 0.55,
+    'hover': 0.50, 'spread': 0.50, 'click': 0.80, 'pick': 0.60,
+    'solve': 0.80, 'wrong': 0.85, 'win': 1.0, 'lose': 0.85, 'start': 0.72,
 }
 
 # Minimum gap (seconds) between repeats of the same sound, so fast cascades
-# don't turn into a machine-gun.
+# don't turn into a machine-gun (or stack into clipping).
 _SOUND_THROTTLE = {
-    'hover': 0.05, 'spread': 0.20, 'pick': 0.045, 'solve': 0.0,
+    'hover': 0.05, 'spread': 0.20, 'pick': 0.06, 'solve': 0.0,
 }
 
 
@@ -43,6 +45,8 @@ class SoundManager(object):
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
+            # plenty of voices so an effect never cuts another short
+            pygame.mixer.set_num_channels(16)
         except (pygame.error, AttributeError):
             self._enabled = False
             return

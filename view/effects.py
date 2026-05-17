@@ -225,6 +225,9 @@ class Effects:
         self.big_spawns = []
         self.rings = []
         self.flashes = []
+        # big-cell pops waiting on a stagger delay, so a chain of cells
+        # resolved at once appears as a cascade rather than all together
+        self._pending_pops = []
         self.bounds = bounds
         self.theme_colors = [(231, 111, 81), (244, 162, 97), (233, 196, 106),
                              (138, 177, 167), (98, 122, 167), (114, 80, 124)]
@@ -252,6 +255,7 @@ class Effects:
         self.big_spawns.clear()
         self.rings.clear()
         self.flashes.clear()
+        self._pending_pops.clear()
         self._shake_remaining = 0.0
         self._shake_amp = 0.0
         self._vig_hold = self._vig_hold_target = 0.0
@@ -306,7 +310,13 @@ class Effects:
         self.rings.append(Ring(cx, cy, color, max_radius=26, life=0.28,
                                width=3))
 
-    def big_pop(self, button, color, snapshot):
+    def big_pop(self, button, color, snapshot, delay=0.0):
+        # a delayed pop is parked until its timer elapses — the cell stays
+        # hidden meanwhile (see consumed_big_spawn_button), then bursts in
+        if delay > 0.0:
+            self._pending_pops.append({'t': delay, 'button': button,
+                                       'color': color, 'snap': snapshot})
+            return
         self.big_spawns.append(BigSpawn(button, snapshot))
         cx, cy = button.rect.center
         self.burst(cx, cy, color, count=20, speed=430,
@@ -399,6 +409,15 @@ class Effects:
         if self._shake_remaining > 0:
             self._shake_remaining = max(0.0, self._shake_remaining - dt)
             self._shake_phase += dt
+        # release any staggered big-cell pops whose delay has elapsed
+        if self._pending_pops:
+            for pp in self._pending_pops:
+                pp['t'] -= dt
+            due = [pp for pp in self._pending_pops if pp['t'] <= 0.0]
+            self._pending_pops = [pp for pp in self._pending_pops
+                                  if pp['t'] > 0.0]
+            for pp in due:
+                self.big_pop(pp['button'], pp['color'], pp['snap'])
         for p in self.particles:
             p.update(dt)
         self.particles = [p for p in self.particles
@@ -479,9 +498,12 @@ class Effects:
         return vig
 
     def consumed_big_spawn_button(self, button):
-        return any(s.button is button for s in self.big_spawns)
+        # True while a pop is playing *or* still parked — either way the
+        # static cell must stay hidden until the pop animation takes over
+        return (any(s.button is button for s in self.big_spawns)
+                or any(pp['button'] is button for pp in self._pending_pops))
 
     @property
     def busy(self):
         return bool(self.particles or self.rings or self.big_spawns
-                    or self.ghosts)
+                    or self.ghosts or self._pending_pops)
