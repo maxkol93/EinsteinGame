@@ -14,16 +14,22 @@ _IS_WEB = sys.platform == 'emscripten'
 _STORE_KEY = 'einsteingame_settings'
 
 _PALETTES = ('mocha', 'nord', 'sunset')
-_COMPLEXITIES = (20, 10, 0)
+_DIFFICULTIES = (0, 1, 2)        # easy / normal / hard
+_SIZES = (4, 5, 6)
 
 _DEFAULTS = {
     'volume': 0.7,
     'palette': 'mocha',
-    'complexity': 20,
+    'difficulty': 0,
+    'size': 6,
     'tooltips': True,
     'touch': False,
-    'tutorial_seen': False,
+    # how many of the 6 onboarding blocks the player has cleared (0..6).
+    # 6 means the whole tutorial is done and every game mode is unlocked.
+    'tutorial_blocks': 0,
 }
+
+TUTORIAL_BLOCKS = 6
 
 
 class Settings(object):
@@ -69,14 +75,31 @@ class Settings(object):
         if stored.get('palette') in _PALETTES:
             self._data['palette'] = stored['palette']
         try:
-            c = int(stored.get('complexity', self._data['complexity']))
-            if c in _COMPLEXITIES:
-                self._data['complexity'] = c
+            d = int(stored.get('difficulty', self._data['difficulty']))
+            if d in _DIFFICULTIES:
+                self._data['difficulty'] = d
         except (ValueError, TypeError):
             pass
-        for flag in ('tooltips', 'touch', 'tutorial_seen'):
+        try:
+            sz = int(stored.get('size', self._data['size']))
+            if sz in _SIZES:
+                self._data['size'] = sz
+        except (ValueError, TypeError):
+            pass
+        for flag in ('tooltips', 'touch'):
             if flag in stored:
                 self._data[flag] = bool(stored[flag])
+        # tutorial progress — a 0..6 block count. Accept the legacy boolean
+        # `tutorial_seen` (an old all-or-nothing flag) as "all blocks done".
+        try:
+            tb = int(stored.get('tutorial_blocks',
+                                self._data['tutorial_blocks']))
+            self._data['tutorial_blocks'] = min(TUTORIAL_BLOCKS, max(0, tb))
+        except (ValueError, TypeError):
+            pass
+        if (stored.get('tutorial_seen') is True
+                and self._data['tutorial_blocks'] == 0):
+            self._data['tutorial_blocks'] = TUTORIAL_BLOCKS
 
     def _save(self):
         try:

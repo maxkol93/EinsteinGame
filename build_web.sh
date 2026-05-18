@@ -2,9 +2,9 @@
 # Build a self-contained pygbag bundle for itch.io / static hosting.
 # Steps:
 #  1. Run `pygbag --build` to produce the apk + tar.gz + default index.html.
-#  2. Bundle CDN files from /tmp/pygame-cdn/ so the page does not need to
-#     reach pygame-web.github.io at runtime (the user's network or itch.io's
-#     COEP may block it).
+#  2. Bundle CDN files from a local mirror (~/.cache) so the page does not
+#     need to reach pygame-web.github.io at runtime (the user's network or
+#     itch.io's COEP may block it). The mirror is fetched once and reused.
 #  3. Patch index.html to use relative CDN paths, drop the unused `vtx`
 #     terminal feature, and set the page background to match the game theme.
 #  4. Zip everything into einsteingame-itch.zip.
@@ -12,14 +12,42 @@
 set -e
 cd "$(dirname "$0")"
 
-CDN_SRC=/tmp/pygame-cdn
+# Mirror lives under ~/.cache — persistent across sessions, and outside the
+# project tree so pygbag never bundles its 22 MB into the game apk.
+CDN_SRC="$HOME/.cache/einstein-pygame-cdn"
+CDN_BASE=https://pygame-web.github.io/cdn
 BUILD=build/web
 ZIP_OUT=einsteingame-itch.zip
 
-if [ ! -d "$CDN_SRC/cdn/0.9.3/cpython312" ]; then
-    echo "ERROR: expected pre-downloaded CDN files at $CDN_SRC/cdn/0.9.3/"
-    exit 1
-fi
+# The pygbag 0.9.3 runtime files never change — mirror them locally once, then
+# every later build is fully offline and fast. A missing file is re-fetched
+# on demand, so a wiped cache self-heals instead of failing the build.
+CDN_FILES=(
+    0.9.3/cpython312/main.data
+    0.9.3/cpython312/main.js
+    0.9.3/cpython312/main.wasm
+    0.9.3/cpythonrc.py
+    0.9.3/empty.html
+    0.9.3/empty.ogg
+    0.9.3/favicon.png
+    0.9.3/pythons.js
+    cp312/pygame_ce-2.5.7-cp312-cp312-wasm32_bi_emscripten.whl
+    index-0.9.3-cp312.json
+    vt.js
+    vtx.js
+)
+fetched=0
+for f in "${CDN_FILES[@]}"; do
+    dest="$CDN_SRC/cdn/$f"
+    if [ ! -s "$dest" ]; then
+        echo "  fetching CDN file: $f"
+        mkdir -p "$(dirname "$dest")"
+        curl -fsSL --retry 3 -o "$dest" "$CDN_BASE/$f"
+        fetched=1
+    fi
+done
+[ "$fetched" = 1 ] && echo "CDN mirror updated ($CDN_SRC/)" \
+                   || echo "CDN mirror ready, no download needed ($CDN_SRC/)"
 
 rm -rf "$BUILD"
 rm -f "$ZIP_OUT"     # so it doesn't get bundled into the apk
@@ -53,9 +81,10 @@ if 'PYGPI' not in src:
 PY
 
 # Index json with relative -CDN- and minimal package list
-python3 - <<'PY'
-import json
-with open("/tmp/pygame-cdn/cdn/index-0.9.3-cp312.json") as f:
+CDN_SRC="$CDN_SRC" python3 - <<'PY'
+import json, os
+with open(os.path.join(os.environ["CDN_SRC"],
+                       "cdn/index-0.9.3-cp312.json")) as f:
     data = json.load(f)
 data["-CDN-"] = "cdn/"
 with open("build/web/cdn/index-0.9.3-cp312.json", "w") as f:
@@ -64,7 +93,7 @@ PY
 
 # Pygame wheel (bundled separately to avoid runtime CDN fetch)
 mkdir -p "$BUILD/cdn/cp312"
-cp /tmp/pygame-cdn/cdn/cp312/pygame_ce-2.5.7-cp312-cp312-wasm32_bi_emscripten.whl \
+cp "$CDN_SRC/cdn/cp312/pygame_ce-2.5.7-cp312-cp312-wasm32_bi_emscripten.whl" \
    "$BUILD/cdn/cp312/" 2>/dev/null || curl -sL \
    -o "$BUILD/cdn/cp312/pygame_ce-2.5.7-cp312-cp312-wasm32_bi_emscripten.whl" \
    "https://pygame-web.github.io/cdn/cp312/pygame_ce-2.5.7-cp312-cp312-wasm32_bi_emscripten.whl"
@@ -135,10 +164,52 @@ if 'einstein-skin' not in src:
                     text-align:center; z-index:4; pointer-events:none;
                     color:#f5f0ec; font:700 42px Arial,sans-serif;
                     letter-spacing:13px; padding-left:13px; }
+  /* keep the game un-distorted: the render is letterboxed inside whatever
+     box pygbag gives the canvas, instead of being squashed to a square */
+  canvas, #canvas, #canvas-3d {
+    object-fit:contain !important; max-width:100vw !important;
+    max-height:100vh !important; }
 </style>
 '''
     src = src.replace('</head>', skin + '</head>', 1)
-    brand = ('<div id="einstein-dots">'
+
+    # mobile-friendly viewport + iOS "add to home screen" fullscreen
+    vp = ('<meta name="viewport" content="width=device-width,'
+          'initial-scale=1,user-scalable=no,viewport-fit=cover">'
+          '<meta name="apple-mobile-web-app-capable" content="yes">'
+          '<meta name="mobile-web-app-capable" content="yes">')
+    if re.search(r'<meta[^>]*name=["\']viewport["\'][^>]*>', src):
+        src = re.sub(r'<meta[^>]*name=["\']viewport["\'][^>]*>', vp, src,
+                     count=1)
+    else:
+        src = src.replace('<head>', '<head>' + vp, 1)
+
+    # unlock audio on mobile: browsers start the audio context suspended and
+    # only resume it after a user gesture. Wrap AudioContext so every context
+    # the runtime creates gets resumed on the first touch/click/key.
+    fixjs = (
+        '<script id="einstein-fix">'
+        '(function(){'
+        'function R(c){try{if(c&&c.state==="suspended")c.resume();}'
+        'catch(e){}}'
+        'function sweep(){try{var m=window.Module;if(m){'
+        '["SDL2","SDL3"].forEach(function(k){if(m[k])R(m[k].audioContext);});'
+        'R(m.audioContext);}R(window.einsteinAC);}catch(e){}}'
+        '["touchend","touchstart","pointerdown","mousedown","click",'
+        '"keydown"].forEach(function(ev){'
+        'window.addEventListener(ev,sweep,true);});'
+        'var n=0,iv=setInterval(function(){sweep();'
+        'if(++n>80)clearInterval(iv);},400);'
+        'try{var AC=window.AudioContext||window.webkitAudioContext;'
+        'if(AC&&!AC.__ei){var W=function(){var c=new AC();'
+        'window.einsteinAC=c;["touchend","pointerdown","keydown"].'
+        'forEach(function(ev){window.addEventListener(ev,function(){R(c);},'
+        'true);});return c;};W.prototype=AC.prototype;W.__ei=true;'
+        'window.AudioContext=W;window.webkitAudioContext=W;}}catch(e){}'
+        '})();</script>\n')
+
+    brand = (fixjs
+             + '<div id="einstein-dots">'
              '<i style="background:#a87377"></i>'
              '<i style="background:#a5674c"></i>'
              '<i style="background:#a58949"></i>'

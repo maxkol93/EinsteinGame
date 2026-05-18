@@ -11,24 +11,25 @@ from view.buttons import (
 from view.effects import Effects, Ghost
 from view.palettes import get_palette
 from view.anim import clamp01, ease_out_back, ease_out_cubic, lerp
-from view.ui import (MenuOverlay, ResultOverlay, TutorialOverlay, TextButton,
-                     make_heart, draw_text)
-from view.decoder import describe_rule
+from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
+                     draw_text, draw_tutorial_progress, TutorialPopup,
+                     TutorialResultOverlay, TutorialMenuOverlay,
+                     BlockSelectOverlay)
+from view.decoder import rule_segments, symbol_for
+from model.tutorial import BLOCK_NAMES
 import view.buttons as buttons_mod
 
 
-# Layout constants. The window is three columns: a left panel (timer + lives),
-# the 6x6 board, and a right panel (rules). Both side panels share one width
-# and the board is framed by an identical margin on every side.
-CELL_SIDE = 100
+# Layout. Three columns: a left panel (timer + lives), the board, and a
+# right panel (clues). The board always occupies the same square area
+# (BOARD_SPAN px); the cell size shrinks as the grid grows (4x4 .. 6x6), so
+# the window and the web framebuffer stay a fixed size for every board.
 CELL_GAP = 3
-FIELD_COLS = 6
-FIELD_ROWS = 6
-FIELD_CELLS = FIELD_ROWS * FIELD_COLS
+BOARD_SPAN = 615             # the board's fixed pixel extent
+DEFAULT_SIZE = 6
+RULE_CELL = 38               # clue mini-button — fixed, independent of board
 
-# the board itself, gaps included
-FIELD_W = CELL_SIDE * FIELD_COLS + CELL_GAP * (FIELD_COLS - 1)
-FIELD_H = CELL_SIDE * FIELD_ROWS + CELL_GAP * (FIELD_ROWS - 1)
+FIELD_W = FIELD_H = BOARD_SPAN
 
 PANEL_W = 280          # the left and the right panel share one width
 MARGIN = 60            # uniform gap framing the board on every side
@@ -45,6 +46,11 @@ CANVAS_WIDTH = PANEL_W + MARGIN + FIELD_W + MARGIN + PANEL_W
 CANVAS_HEIGHT = MARGIN + FIELD_H + MARGIN
 
 HOVER_PROPAGATE_DELAY = 0.2  # seconds before a hover fans out to linked cells
+
+
+def _cell_side_for(size):
+    """Pixel side of one board cell so `size` of them span BOARD_SPAN."""
+    return (BOARD_SPAN - (size - 1) * CELL_GAP) // size
 
 _LOOSE_MSGS = [
     "don't worry and try again!",
@@ -124,7 +130,12 @@ def _make_gradient_surface(size, base, top_factor=1.30, bottom_factor=0.65,
 
 class GameWindow(object):
     def __init__(self, rules, palette_name='mocha', sounds=None,
-                 complexity=20):
+                 difficulty=0, size=DEFAULT_SIZE, tutorial=False):
+        # tutorial mode swaps the left panel for a 6-block progress tracker
+        # and hides the timer, lives, solved count and hint button.
+        self._tutorial = tutorial
+        self._tut_tracker = []
+        self._tut_block_name = ''
         self._base_dir = os.path.dirname(__file__)
         self._images_dir = os.path.join(self._base_dir, 'images')
         self._fonts_dir = os.path.join(self._base_dir, 'fonts')
@@ -133,7 +144,14 @@ class GameWindow(object):
         self._palette = get_palette(palette_name)
         apply_palette(self._palette)
         self._sounds = sounds
-        self._complexity = complexity
+        self._difficulty = difficulty   # 0/1/2 — easy/normal/hard
+        self._sel_size = size           # board size selected for next restart
+
+        # board geometry — cell size and candidate sub-grid follow the size
+        self._size = size
+        self._cell_side = _cell_side_for(size)
+        self._cand_cols = math.ceil(math.sqrt(size))
+        self._cand_rows = math.ceil(size / self._cand_cols)
 
         self.surface = pygame.display.get_surface()
         if self.surface is None:
@@ -182,11 +200,13 @@ class GameWindow(object):
         self._touch_mode = False
         self._armed = None       # touch: a tapped-once widget awaiting confirm
 
-        self._show_rules_overlay = False
-        self._rules_scroll = 0
         self._overlay = None       # MenuOverlay / ResultOverlay
         self._confetti_timer = 0.0
         self._stats_summary = None
+
+        # in-game hint: a cell whose correct candidate is briefly ringed
+        self._hint_btn = None
+        self._hint_t = 0.0
 
         # cells resolved together by one click pop in as a cascade: each is
         # collected here, then flushed with a staggered delay
@@ -198,12 +218,14 @@ class GameWindow(object):
         self.on_continue = None
         self.on_restart = None
         self.on_mode_select = None
+        self.on_size_select = None
         self.on_open_menu = None
         self.on_volume = None
         self.on_tooltips = None
         self.on_touch = None
         self.on_theme = None
-        self.on_tutorial_done = None
+        self.on_hint = None
+        self.on_block_replay = None    # tutorial: replay a chosen block
 
         self._build_field_buttons()
         self._build_rules_buttons(list(rules))
@@ -217,9 +239,11 @@ class GameWindow(object):
         reg = os.path.join(self._fonts_dir, 'DejaVuSans.ttf')
         bold = os.path.join(self._fonts_dir, 'DejaVuSans-Bold.ttf')
         self._font_msg = pygame.font.Font(reg, 16)
-        self._font_field = pygame.font.Font(bold, 14)
+        # candidate + big-cell glyphs scale with the (size-dependent) cell
+        cand_sub = self._cell_side // self._cand_cols
+        self._font_field = pygame.font.Font(bold, max(11, int(cand_sub * 0.42)))
         self._font_rule = pygame.font.Font(reg, 18)
-        self._font_big = pygame.font.Font(bold, 48)
+        self._font_big = pygame.font.Font(bold, max(28, int(self._cell_side * 0.46)))
         self._font_timer = pygame.font.Font(bold, 31)
         self._font_menu = pygame.font.Font(bold, 18)
         self._font_label = pygame.font.Font(bold, 12)
@@ -232,42 +256,52 @@ class GameWindow(object):
         }
 
     def _load_images(self):
-        # Procedural big-cell backgrounds (top-light gradient + subtle sheen).
+        # Procedural big-cell backgrounds (top-light gradient + subtle sheen),
+        # one per board row, sized to this board's cell.
         self._big_bg = [None]
-        for row in range(1, 7):
+        for row in range(1, self._size + 1):
             base = self._palette['rows'][row]
-            self._big_bg.append(_make_gradient_surface((CELL_SIDE, CELL_SIDE), base))
-        self._img_rules_page = pygame.image.load(
-            os.path.join(self._images_dir, 'Game_rules_900_1767.jpg')
-        ).convert_alpha()
+            self._big_bg.append(_make_gradient_surface(
+                (self._cell_side, self._cell_side), base))
 
     # --------------------------- building ----------------------------
 
+    def _cell_origin(self, y, x):
+        """Top-left pixel of board cell (y, x)."""
+        step = self._cell_side + CELL_GAP
+        return INDENT_LEFT + x * step, INDENT_TOP + y * step
+
     def _build_field_buttons(self):
-        for y in range(FIELD_ROWS):
+        for y in range(self._size):
             row = []
-            for x in range(FIELD_COLS):
+            for x in range(self._size):
                 row.append(self._create_mini_buttons(y, x))
             self._cells.append(row)
 
     def _create_mini_buttons(self, y, x):
+        """The `size` candidate sub-buttons of one cell, laid out in an
+        adaptive grid of square tiles (2x2 for 4, 3x2 for 5 and 6)."""
         btns = []
-        cell_x = INDENT_LEFT + x * CELL_SIDE + x * CELL_GAP
-        cell_y = INDENT_TOP + y * CELL_SIDE + y * CELL_GAP + 16
-        sub_w = CELL_SIDE // 3
-        sub_h = CELL_SIDE // 3
-        for dy in range(2):
-            for dx in range(3):
-                n = (y + 1) * 10 + dy * 3 + dx + 1
-                rect = (cell_x + dx * sub_w, cell_y + dy * sub_h, sub_w, sub_h)
-                btn = FieldButton(y, x, n, rect, self._font_field)
-                btns.append(btn)
+        ox, oy = self._cell_origin(y, x)
+        cols, rows = self._cand_cols, self._cand_rows
+        inset = max(3, self._cell_side // 22)
+        avail = self._cell_side - 2 * inset
+        sub = min(avail // cols, avail // rows)      # square candidate tiles
+        gx = ox + (self._cell_side - sub * cols) // 2
+        gy = oy + (self._cell_side - sub * rows) // 2
+        for index in range(self._size):
+            dy, dx = index // cols, index % cols
+            in_row = min(cols, self._size - dy * cols)   # centre a short row
+            row_off = (cols - in_row) * sub // 2
+            n = (y + 1) * 10 + index + 1
+            rect = (gx + row_off + dx * sub, gy + dy * sub, sub, sub)
+            btns.append(FieldButton(y, x, n, rect, self._font_field))
         return btns
 
     def _build_rules_buttons(self, rules):
         rules.sort(key=lambda r: (1, r[1]) if isinstance(r[1], str) else (0, r[1]),
                    reverse=True)
-        mini = (CELL_SIDE + 15) // 3
+        mini = RULE_CELL
         rule_w = mini * 3
         col_gap = 16
         pad_x = (RULES_PANEL_W - 2 * rule_w - col_gap) // 2
@@ -287,6 +321,10 @@ class GameWindow(object):
             (24, 22, SIDEBAR_W - 48, 48), 'MENU', self._font_menu,
             base, self._palette['text'], on_click=self._request_menu,
             radius=12, accent=buttons_mod._brighten(self._palette['panel'], 70))
+        self._hint_button = TextButton(
+            (28, 470, SIDEBAR_W - 56, 42), 'HINT', self._font_menu,
+            base, self._palette['text'], on_click=self._request_hint,
+            radius=12)
 
     def _make_shadow_strip(self, dark_on_right):
         """A 16px soft shadow strip cast by a panel onto the board area."""
@@ -299,8 +337,11 @@ class GameWindow(object):
 
     # --------------------------- public API --------------------------
 
-    def change_complexity(self, complexity):
-        self._complexity = complexity
+    def set_difficulty(self, difficulty):
+        self._difficulty = difficulty
+
+    def set_sel_size(self, size):
+        self._sel_size = size
 
     def set_stats(self, summary):
         """Per-difficulty progress, shown by the menu overlay."""
@@ -416,7 +457,8 @@ class GameWindow(object):
         callbacks = {
             'continue': self._menu_continue,
             'restart': lambda: self.on_restart and self.on_restart(),
-            'mode': lambda c: self.on_mode_select and self.on_mode_select(c),
+            'mode': lambda d: self.on_mode_select and self.on_mode_select(d),
+            'size': lambda s: self.on_size_select and self.on_size_select(s),
             'tutorial': self.open_tutorial,
             'volume': lambda v: self.on_volume and self.on_volume(v),
             'theme': self._menu_theme,
@@ -425,18 +467,61 @@ class GameWindow(object):
         }
         self._overlay = MenuOverlay((CANVAS_WIDTH, CANVAS_HEIGHT),
                                     self._palette, self._ui_fonts,
-                                    self._complexity, vol, callbacks,
-                                    stats=self._stats_summary,
+                                    self._difficulty, self._sel_size, vol,
+                                    callbacks, stats=self._stats_summary,
                                     tooltips=self._tooltips_enabled,
                                     touch=self._touch_mode)
 
     def open_tutorial(self):
-        """Open the paged how-to-play guide (returns to the menu on close)."""
-        self._play('click')
+        """Menu 'Tutorial' button (post-onboarding): pick a block to replay."""
         self._armed = None
-        self._overlay = TutorialOverlay(
+        self._overlay = BlockSelectOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
-            on_done=lambda: self.on_tutorial_done and self.on_tutorial_done())
+            list(BLOCK_NAMES),
+            on_pick=lambda i: self.on_block_replay and self.on_block_replay(i),
+            on_close=self.open_menu)
+
+    # --------------------- tutorial overlays -------------------------
+
+    def set_tutorial_progress(self, tracker, block_name):
+        """Feed the side-panel tracker its 6-block state."""
+        self._tut_tracker = list(tracker)
+        self._tut_block_name = block_name
+
+    def clues_rect(self):
+        """Screen rect bounding the displayed clue buttons (for a spotlight)."""
+        rects = [sub.rect for grp in self._rules_buttons for sub in grp]
+        if not rects:
+            return pygame.Rect(RULES_PANEL_X + 30, 40, RULES_PANEL_W - 60, 90)
+        bounds = rects[0].unionall(rects[1:])
+        return bounds.inflate(30, 30)
+
+    def show_popup(self, text, button_label='Got it', on_done=None,
+                   tag='TUTORIAL', spotlight=None):
+        self._armed = None
+        self._overlay = TutorialPopup(
+            (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
+            text, button_label=button_label, on_done=on_done, tag=tag,
+            spotlight=spotlight)
+
+    def show_tutorial_result(self, title, message, tracker,
+                             button_label='Continue', on_continue=None,
+                             celebrate=True):
+        self._armed = None
+        self._overlay = TutorialResultOverlay(
+            (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
+            title, message, list(tracker), button_label=button_label,
+            on_continue=on_continue)
+        if celebrate:
+            self._effects.celebrate()
+
+    def open_tutorial_menu(self, tracker, callbacks):
+        self._effects.calm()
+        self._armed = None
+        vol = self._sounds.volume if self._sounds else 0.7
+        self._overlay = TutorialMenuOverlay(
+            (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
+            list(tracker), vol, callbacks)
 
     def _menu_tooltips(self, value):
         self._tooltips_enabled = bool(value)
@@ -476,6 +561,11 @@ class GameWindow(object):
         if self.on_open_menu:
             self.on_open_menu()
 
+    def _request_hint(self):
+        self._play('click')
+        if self.on_hint:
+            self.on_hint()
+
     def _menu_continue(self):
         self._play('click')
         self.close_overlay()
@@ -493,6 +583,7 @@ class GameWindow(object):
     # --------------------------- cell logic --------------------------
 
     def remove_button(self, btn):
+        self._hint_btn = None      # any board change retires a stale hint
         cur_n = btn.n
         cur_y = btn.y
         cur_x = btn.x
@@ -551,11 +642,8 @@ class GameWindow(object):
         from view.decoder import decode_symbol
         self._defined_cells_count += 1
         bg = self._big_bg[n // 10]
-        rect = (
-            INDENT_LEFT + x * CELL_SIDE + x * CELL_GAP,
-            INDENT_TOP + y * CELL_SIDE + y * CELL_GAP,
-            CELL_SIDE, CELL_SIDE,
-        )
+        ox, oy = self._cell_origin(y, x)
+        rect = (ox, oy, self._cell_side, self._cell_side)
         btn = GameButton(rect=rect, bg_image=bg,
                          text=decode_symbol.get(n, ''),
                          font=self._font_big, border=True)
@@ -600,9 +688,8 @@ class GameWindow(object):
         return snap
 
     def wrong_feedback(self, btn):
-        cell_x = INDENT_LEFT + btn.x * CELL_SIDE + btn.x * CELL_GAP
-        cell_y = INDENT_TOP + btn.y * CELL_SIDE + btn.y * CELL_GAP
-        rect = pygame.Rect(cell_x, cell_y, CELL_SIDE, CELL_SIDE)
+        ox, oy = self._cell_origin(btn.y, btn.x)
+        rect = pygame.Rect(ox, oy, self._cell_side, self._cell_side)
         self._effects.wrong_click(rect)
 
     def _spawn_small_pop(self, btn):
@@ -623,7 +710,7 @@ class GameWindow(object):
         return (y + x) * self.CASCADE_DIAGONAL_STEP
 
     def _compute_cascade_duration(self):
-        max_birth = self._cell_t_birth(FIELD_ROWS - 1, FIELD_COLS - 1)
+        max_birth = self._cell_t_birth(self._size - 1, self._size - 1)
         self._cascade_duration = max_birth + self.CASCADE_PER_CELL_TIME
 
     def _rules_panel_alpha(self):
@@ -670,9 +757,9 @@ class GameWindow(object):
                 big.draw(surface)
 
     def _render_cell_cascading(self, y, x, surface, alpha, scale):
-        cell_origin_x = INDENT_LEFT + x * CELL_SIDE + x * CELL_GAP
-        cell_origin_y = INDENT_TOP + y * CELL_SIDE + y * CELL_GAP
-        temp = pygame.Surface((CELL_SIDE, CELL_SIDE), pygame.SRCALPHA)
+        cell_origin_x, cell_origin_y = self._cell_origin(y, x)
+        side = self._cell_side
+        temp = pygame.Surface((side, side), pygame.SRCALPHA)
         targets = []
         cell = self._cells[y][x]
         if isinstance(cell, list):
@@ -691,13 +778,13 @@ class GameWindow(object):
                 btn.draw(temp)
             finally:
                 btn.rect.topleft = saved
-        sw = max(1, int(CELL_SIDE * scale))
-        sh = max(1, int(CELL_SIDE * scale))
-        if (sw, sh) != (CELL_SIDE, CELL_SIDE):
+        sw = max(1, int(side * scale))
+        sh = max(1, int(side * scale))
+        if (sw, sh) != (side, side):
             temp = pygame.transform.smoothscale(temp, (sw, sh))
         temp.set_alpha(int(255 * alpha))
-        cx = cell_origin_x + CELL_SIDE // 2
-        cy = cell_origin_y + CELL_SIDE // 2
+        cx = cell_origin_x + side // 2
+        cy = cell_origin_y + side // 2
         surface.blit(temp, (cx - sw // 2, cy - sh // 2))
 
     # --------------------------- palette switching -------------------
@@ -719,8 +806,9 @@ class GameWindow(object):
         buttons_mod.clear_rounded_cache()
         self._effects.set_theme_colors(list(self._palette['rows'].values()))
         self._big_bg = [None] + [
-            _make_gradient_surface((CELL_SIDE, CELL_SIDE), self._palette['rows'][r])
-            for r in range(1, 7)
+            _make_gradient_surface((self._cell_side, self._cell_side),
+                                   self._palette['rows'][r])
+            for r in range(1, self._size + 1)
         ]
         for row in self._cells:
             for cell in row:
@@ -729,7 +817,7 @@ class GameWindow(object):
                         b.bg_color = color_for_value(b.n)
         for big in self._big_buttons:
             row_idx = big.user_data or 0
-            if 1 <= row_idx <= 6:
+            if 1 <= row_idx <= self._size:
                 big.bg_image = self._big_bg[row_idx]
         for group in self._rules_buttons:
             for sub in group:
@@ -759,9 +847,13 @@ class GameWindow(object):
             return
 
         self._menu_button.handle_event(event)
+        if not self._tutorial:
+            self._hint_button.handle_event(event)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = event.pos
-            if self._menu_button.rect.collidepoint(pos):
+            if self._menu_button.rect.collidepoint(pos) or (
+                    not self._tutorial
+                    and self._hint_button.rect.collidepoint(pos)):
                 return
             for group in self._rules_buttons:
                 for sub in group:
@@ -807,15 +899,6 @@ class GameWindow(object):
         if self.on_rule_click:
             self.on_rule_click(sub)
 
-    def _open_rules_overlay(self):
-        self._show_rules_overlay = True
-        self._rules_scroll = 0
-        self._play('click')
-
-    def _close_rules_overlay(self):
-        self._show_rules_overlay = False
-        self._play('click')
-
     # --------------------------- update ------------------------------
 
     def tick(self, dt_ms):
@@ -833,20 +916,24 @@ class GameWindow(object):
             self._mouse_pos = (-1, -1)
 
         self._menu_button.update(dt, self._mouse_pos)
+        self._hint_button.update(dt, self._mouse_pos)
+        if self._hint_t > 0.0:
+            self._hint_t = max(0.0, self._hint_t - dt)
+            if self._hint_t == 0.0:
+                self._hint_btn = None
 
         if self._overlay is not None:
             self._overlay.update(dt, self._mouse_pos)
             if self._overlay.dead:
-                # closing the tutorial drops the player back to the menu
-                was_tutorial = isinstance(self._overlay, TutorialOverlay)
                 self._overlay = None
-                if was_tutorial:
-                    self.open_menu()
-            elif isinstance(self._overlay, ResultOverlay) and self._overlay.won:
-                self._confetti_timer -= dt
-                if self._confetti_timer <= 0.0:
-                    self._confetti_timer = 0.85
-                    self._effects.confetti(20)
+            else:
+                won = (isinstance(self._overlay, ResultOverlay)
+                       and self._overlay.won)
+                if won or isinstance(self._overlay, TutorialResultOverlay):
+                    self._confetti_timer -= dt
+                    if self._confetti_timer <= 0.0:
+                        self._confetti_timer = 0.95
+                        self._effects.confetti(12)
 
         self._update_hover(dt)
 
@@ -878,7 +965,7 @@ class GameWindow(object):
 
     def _update_hover(self, dt):
         # No hover during the entrance cascade or while an overlay is up.
-        if (self._overlay is not None or self._show_rules_overlay
+        if (self._overlay is not None
                 or self._cascade_time < self._cascade_duration):
             for btn in self._iter_field_buttons():
                 btn.glow_target = btn.lift_target = 0.0
@@ -909,6 +996,10 @@ class GameWindow(object):
             if any(sub.hit_test(pos) for sub in group):
                 hovered_group = gi
                 break
+        # a crossed-out (used) clue is inert — it lights nothing
+        if (hovered_group is not None
+                and self._rules_buttons[hovered_group][0].pressed):
+            hovered_group = None
 
         # the field values a hovered rule block points at. Markers ("^",
         # "<->", "...") are strings — they describe layout, not a cell, so
@@ -971,6 +1062,10 @@ class GameWindow(object):
         # every value in the spread set lights too — field cells and the
         # matching cells of *other* rules alike. Rule cells never lift.
         for gi, group in enumerate(self._rules_buttons):
+            if group[0].pressed:        # crossed-out clue — never highlights
+                for sub in group:
+                    sub.glow_target = sub.lift_target = 0.0
+                continue
             block_lit = gi == hovered_group
             for sub in group:
                 lit = block_lit or (isinstance(sub.value, int)
@@ -995,15 +1090,15 @@ class GameWindow(object):
         # Soft ghost outlines so the big-cell grid stays readable.
         bg = buttons_mod.BG_COLOR
         outline_color = tuple(min(255, c + 14) for c in bg)
-        outline_pad = buttons_mod.rounded_fill(CELL_SIDE, CELL_SIDE, outline_color, 14)
-        for y in range(FIELD_ROWS):
-            for x in range(FIELD_COLS):
-                cx = INDENT_LEFT + x * CELL_SIDE + x * CELL_GAP
-                cy = INDENT_TOP + y * CELL_SIDE + y * CELL_GAP
+        outline_pad = buttons_mod.rounded_fill(self._cell_side, self._cell_side,
+                                               outline_color, 14)
+        for y in range(self._size):
+            for x in range(self._size):
+                cx, cy = self._cell_origin(y, x)
                 s.blit(outline_pad, (cx, cy))
 
-        for y in range(FIELD_ROWS):
-            for x in range(FIELD_COLS):
+        for y in range(self._size):
+            for x in range(self._size):
                 alpha, scale = self._cell_visible_state(y, x)
                 if alpha <= 0:
                     continue
@@ -1029,6 +1124,7 @@ class GameWindow(object):
         self._effects.draw_over(s)
         self._draw_left_panel(s)
         self._draw_tooltip(s)
+        self._draw_hint(s)
         self._draw_armed(s)
         self._effects.draw_vignette(s)
 
@@ -1038,8 +1134,6 @@ class GameWindow(object):
 
         if self._overlay is not None:
             self._overlay.draw(self.surface)
-        if self._show_rules_overlay:
-            self._draw_rules_overlay(self.surface)
 
     def _draw_message(self, surface):
         """The good/wrong feedback pill, shown inside the left panel."""
@@ -1099,7 +1193,8 @@ class GameWindow(object):
         return cx, cy
 
     def _complexity_name(self):
-        return {20: 'EASY', 10: 'NORMAL', 0: 'HARD'}.get(self._complexity, '—')
+        name = ('EASY', 'NORMAL', 'HARD')[max(0, min(2, self._difficulty))]
+        return '%s  ·  %d×%d' % (name, self._size, self._size)
 
     def _draw_rules_panel(self, surface):
         """Right-panel backing — mirrors the left panel. Drawn before the rule
@@ -1128,6 +1223,10 @@ class GameWindow(object):
 
         self._menu_button.draw(surface)
 
+        if self._tutorial:
+            self._draw_tutorial_panel(surface, panel, muted, text, cx)
+            return
+
         # timer
         draw_text(surface, 'T I M E', self._font_label, muted,
                   center=(cx, 104))
@@ -1145,6 +1244,9 @@ class GameWindow(object):
         # good/wrong feedback message
         self._draw_message(surface)
 
+        # in-game hint button
+        self._hint_button.draw(surface)
+
         # footer: difficulty + debug hint
         pygame.draw.line(surface, buttons_mod._brighten(panel, 22),
                          (24, CANVAS_HEIGHT - 104),
@@ -1157,6 +1259,24 @@ class GameWindow(object):
                   buttons_mod._brighten(self._palette['bg'], 40),
                   center=(cx, CANVAS_HEIGHT - 28))
 
+    def _draw_tutorial_panel(self, surface, panel, muted, text, cx):
+        """Left panel during the tutorial — the 6-block progress tracker and
+        a TUTORIAL · <block> mode footer, in place of timer/lives/hint."""
+        draw_text(surface, 'T U T O R I A L', self._font_label, muted,
+                  center=(cx, 104))
+        draw_tutorial_progress(surface, 24, 132, SIDEBAR_W - 48,
+                               self._tut_tracker, self._ui_fonts,
+                               self._palette, row_h=48)
+        pygame.draw.line(surface, buttons_mod._brighten(panel, 22),
+                         (24, CANVAS_HEIGHT - 116),
+                         (SIDEBAR_W - 24, CANVAS_HEIGHT - 116))
+        draw_text(surface, 'MODE', self._font_label, muted,
+                  center=(cx, CANVAS_HEIGHT - 94))
+        draw_text(surface, 'TUTORIAL', self._font_menu, text,
+                  center=(cx, CANVAS_HEIGHT - 68))
+        draw_text(surface, self._tut_block_name, self._ui_fonts['small'],
+                  muted, center=(cx, CANVAS_HEIGHT - 44))
+
     PROGRESS_Y = 296
 
     def _draw_progress(self, surface):
@@ -1166,8 +1286,8 @@ class GameWindow(object):
         y = self.PROGRESS_Y
         draw_text(surface, 'S O L V E D', self._font_label, muted,
                   center=(cx, y))
-        draw_text(surface, '%d / %d' % (self._defined_cells_count,
-                                        FIELD_CELLS),
+        total = self._size * self._size
+        draw_text(surface, '%d / %d' % (self._defined_cells_count, total),
                   self._font_menu, self._palette['text'], center=(cx, y + 26))
         bw = SIDEBAR_W - 80
         bx = (SIDEBAR_W - bw) // 2
@@ -1175,27 +1295,61 @@ class GameWindow(object):
         surface.blit(rounded_fill(bw, 6,
                                   buttons_mod._brighten(self._palette['bg'],
                                                         26), 3), (bx, by))
-        frac = clamp01(self._defined_cells_count / float(FIELD_CELLS))
+        frac = clamp01(self._defined_cells_count / float(total))
         fw = int(bw * frac)
         if fw > 0:
             surface.blit(rounded_fill(fw, 6, self._palette['accent'], 3),
                          (bx, by))
 
+    TOOLTIP_TILE = 28
+
+    def _tooltip_tile(self, value):
+        """A small board-coloured cell tile, drawn inline in the tooltip."""
+        s = self.TOOLTIP_TILE
+        surf = pygame.Surface((s, s), pygame.SRCALPHA)
+        col = color_for_value(value) or (120, 120, 120)
+        surf.blit(rounded_fill(s, s, col, 6), (0, 0))
+        surf.blit(rounded_border(s, s, BG_COLOR, 6, 1), (0, 0))
+        img = self._font_rule.render(symbol_for(value), True, (255, 255, 255))
+        surf.blit(img, img.get_rect(center=(s // 2, s // 2)))
+        return surf
+
     def _draw_tooltip(self, surface):
-        """A small plain-language reading of the rule under the cursor."""
+        """A plain-language reading of the rule under the cursor — words plus
+        real coloured cell tiles, so the abstract markers stay concrete."""
         if (not self._tooltips_enabled or self._hovered_group is None
                 or self._overlay is not None):
             return
         group = self._rules_buttons[self._hovered_group]
-        text = describe_rule(tuple(sub.value for sub in group))
-        lines = self._wrap_text(text, self._font_msg, 232)
-        line_h = self._font_msg.get_height()
-        pad_x, pad_y = 14, 9
-        tw = max(self._font_msg.size(ln)[0] for ln in lines)
-        pw, ph = tw + pad_x * 2, line_h * len(lines) + pad_y * 2
-        grect = group[0].rect.union(group[-1].rect)
-        tx = max(8, grect.left - 14 - pw)
-        ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
+        segments = rule_segments(tuple(sub.value for sub in group))
+        font = self._font_msg
+        tile = self.TOOLTIP_TILE
+        space = font.size(' ')[0]
+        line_h = max(font.get_height(), tile) + 4
+        max_w = 250
+
+        # flow words and cell tiles into wrapped lines
+        tokens = []
+        for kind, val in segments:
+            if kind == 'cell':
+                tokens.append(('cell', val, tile))
+            else:
+                for word in str(val).split():
+                    tokens.append(('word', word, font.size(word)[0]))
+        lines, line_w = [[]], 0
+        for tok in tokens:
+            add = tok[2] + (space if line_w > 0 else 0)
+            if line_w > 0 and line_w + add > max_w:
+                lines.append([])
+                line_w = add = tok[2]
+            lines[-1].append(tok)
+            line_w += add
+        widths = [sum(t[2] for t in ln) + space * max(0, len(ln) - 1)
+                  for ln in lines]
+
+        pad_x, pad_y = 14, 11
+        pw = max(widths) + pad_x * 2
+        ph = line_h * len(lines) + pad_y * 2
         pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
         pill.blit(rounded_fill(pw, ph,
                                buttons_mod._brighten(self._palette['panel'],
@@ -1203,10 +1357,38 @@ class GameWindow(object):
         pill.blit(rounded_border(pw, ph,
                                  buttons_mod._brighten(self._palette['panel'],
                                                        64), 12, 1), (0, 0))
-        for i, ln in enumerate(lines):
-            img = self._font_msg.render(ln, True, self._palette['text'])
-            pill.blit(img, (pad_x, pad_y + i * line_h))
+        for li, ln in enumerate(lines):
+            x = pad_x
+            cy = pad_y + li * line_h + line_h // 2
+            for kind, val, w in ln:
+                if kind == 'cell':
+                    pill.blit(self._tooltip_tile(val), (x, cy - tile // 2))
+                else:
+                    img = font.render(val, True, self._palette['text'])
+                    pill.blit(img, (x, cy - img.get_height() // 2))
+                x += w + space
+        grect = group[0].rect.union(group[-1].rect)
+        tx = max(8, grect.left - 14 - pw)
+        ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
         surface.blit(pill, (tx, ty))
+
+    def _draw_hint(self, surface):
+        """A gold pulsing ring on the cell the hint pointed at."""
+        if self._hint_btn is None or self._hint_t <= 0.0:
+            return
+        r = self._hint_btn.rect
+        p = 0.5 + 0.5 * math.sin(self._clock * 7.0)
+        ring = r.inflate(8 + 6 * p, 8 + 6 * p)
+        surface.blit(rounded_border(ring.w, ring.h, (255, 222, 90),
+                                    max(5, ring.h // 3), 3), ring.topleft)
+        img = self._font_label.render('keep this one', True, (28, 24, 22))
+        pw, ph = img.get_width() + 14, img.get_height() + 7
+        pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        pill.blit(rounded_fill(pw, ph, (255, 222, 90), ph // 2), (0, 0))
+        pill.blit(img, (7, 3))
+        px = max(4, min(CANVAS_WIDTH - pw - 4, r.centerx - pw // 2))
+        py = max(4, r.top - ph - 10)
+        surface.blit(pill, (px, py))
 
     def _draw_armed(self, surface):
         """Touch mode: ring the tapped-once widget and prompt to confirm."""
@@ -1259,16 +1441,24 @@ class GameWindow(object):
                 surface.blit(spr, (cx - self.HEART_SIZE // 2,
                                    cy - self.HEART_SIZE // 2))
 
-    def _draw_rules_overlay(self, surface):
-        dim = pygame.Surface((CANVAS_WIDTH, CANVAS_HEIGHT))
-        dim.set_alpha(228)
-        dim.fill((20, 18, 22))
-        surface.blit(dim, (0, 0))
-        img = self._img_rules_page
-        x = (CANVAS_WIDTH - img.get_width()) // 2
-        y = 20 - self._rules_scroll
-        surface.blit(img, (x, y))
-        hint = self._font_msg.render(
-            'click anywhere to close • scroll to read', True, (255, 255, 200))
-        surface.blit(hint, ((CANVAS_WIDTH - hint.get_width()) // 2,
-                            CANVAS_HEIGHT - 28))
+    def find_hint_target(self, model):
+        """Pick an unsolved cell and return the FieldButton of its correct
+        candidate — the in-game hint marks that tile."""
+        import random
+        cells = [c for row in self._cells for c in row
+                 if isinstance(c, list) and len(c) > 1]
+        if not cells:
+            return None
+        cell = random.choice(cells)
+        y, x = cell[0].y, cell[0].x
+        answer = model[y][x]
+        for btn in cell:
+            if btn.n == answer:
+                return btn
+        return None
+
+    def show_hint(self, btn):
+        """Briefly ring a tile as the answer for its cell."""
+        self._hint_btn = btn
+        self._hint_t = 4.0
+        self._play('spread')

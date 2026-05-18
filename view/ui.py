@@ -306,6 +306,7 @@ class Segmented(object):
         self.active_color = active_color
         self.text_color = text_color
         self.on_select = on_select
+        self.enabled = True
         self._hover = [0.0] * len(options)
 
     def _seg_rect(self, i):
@@ -322,6 +323,8 @@ class Segmented(object):
                                       dt, 16)
 
     def handle_event(self, event):
+        if not self.enabled:
+            return False
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for i in range(len(self.options)):
                 if self._seg_rect(i).collidepoint(event.pos):
@@ -335,12 +338,19 @@ class Segmented(object):
         for i, (label, _value) in enumerate(self.options):
             r = self._seg_rect(i)
             active = (i == self.index)
-            if active:
-                color = self.active_color
+            if not self.enabled:
+                color = lerp_color(self.base_color, (58, 58, 62), 0.55)
+                if active:
+                    color = lerp_color(self.active_color, (96, 96, 100), 0.6)
+                tcol = lerp_color(self.text_color, color, 0.5)
             else:
-                color = _brighten(self.base_color, int(26 * self._hover[i]))
+                if active:
+                    color = self.active_color
+                else:
+                    color = _brighten(self.base_color,
+                                      int(26 * self._hover[i]))
+                tcol = (30, 30, 34) if active else self.text_color
             surface.blit(rounded_fill(r.w, r.h, color, 9), r.topleft)
-            tcol = (30, 30, 34) if active else self.text_color
             img = self.font.render(label, True, tcol)
             surface.blit(img, img.get_rect(center=r.center))
 
@@ -638,12 +648,12 @@ class _Overlay(object):
 
 
 class MenuOverlay(_Overlay):
-    """Main menu: continue, restart, difficulty, volume, how-to-play, theme,
-    tooltip + touch toggles, and per-difficulty progress."""
+    """Main menu: continue/restart, difficulty + board size, volume,
+    how-to-play, theme, tooltip + touch toggles, and progress stats."""
 
     PANEL_W = 436
 
-    def __init__(self, screen_size, palette, fonts, complexity, volume,
+    def __init__(self, screen_size, palette, fonts, difficulty, size, volume,
                  callbacks, stats=None, tooltips=True, touch=False):
         super().__init__(screen_size, palette)
         self._stats = stats
@@ -653,65 +663,71 @@ class MenuOverlay(_Overlay):
         x = pad
         inner_w = self.PANEL_W - pad * 2
 
-        y = 110
+        y = 104
         self.btn_continue = TextButton(
-            (x, y, inner_w, 52), 'Continue', fonts['btn'],
+            (x, y, inner_w, 50), 'Continue', fonts['btn'],
             self.accent, (28, 26, 30), on_click=callbacks.get('continue'),
             radius=14)
-        y += 52 + 10
+        y += 50 + 9
         self.btn_restart = TextButton(
-            (x, y, inner_w, 44), 'Restart', fonts['btn'],
+            (x, y, inner_w, 42), 'Restart', fonts['btn'],
             self.btn_base, self.text_color, on_click=callbacks.get('restart'),
             radius=12)
-        y += 44 + 18
+        y += 42 + 15
 
-        self._mode_label_y = y
-        y += 22
-        opts = [('Easy', 20), ('Normal', 10), ('Hard', 0)]
-        idx = {20: 0, 10: 1, 0: 2}.get(complexity, 0)
-        self.segmented = Segmented(
-            (x, y, inner_w, 40), opts, idx, fonts['small'],
-            self.btn_base, self.accent, self.text_color,
-            on_select=callbacks.get('mode'))
-        y += 40 + 16
+        self._diff_label_y = y
+        y += 20
+        self.seg_diff = Segmented(
+            (x, y, inner_w, 38), [('Easy', 0), ('Normal', 1), ('Hard', 2)],
+            max(0, min(2, difficulty)), fonts['small'], self.btn_base,
+            self.accent, self.text_color, on_select=callbacks.get('mode'))
+        y += 38 + 12
+
+        self._size_label_y = y
+        y += 20
+        self.seg_size = Segmented(
+            (x, y, inner_w, 38), [('4 × 4', 4), ('5 × 5', 5), ('6 × 6', 6)],
+            {4: 0, 5: 1, 6: 2}.get(size, 2), fonts['small'], self.btn_base,
+            self.accent, self.text_color, on_select=callbacks.get('size'))
+        y += 38 + 14
 
         self._vol_label_y = y
-        y += 22
+        y += 20
         self.slider = Slider(
             (x, y + 4, inner_w - 56, 16), volume, fonts['small'],
             _brighten(palette['panel'], 24), self.accent, self.text_color,
             on_change=callbacks.get('volume'))
-        y += 16 + 20
+        y += 16 + 16
 
         half = (inner_w - 12) // 2
         self.btn_howto = TextButton(
-            (x, y, half, 44), 'How to Play', fonts['btn'],
+            (x, y, half, 42), 'Tutorial', fonts['btn'],
             self.accent, (28, 26, 30), on_click=callbacks.get('tutorial'),
             radius=12)
         self.btn_theme = TextButton(
-            (x + half + 12, y, half, 44), 'Theme', fonts['btn'],
+            (x + half + 12, y, half, 42), 'Theme', fonts['btn'],
             self.btn_base, self.text_color, on_click=callbacks.get('theme'),
             radius=12)
-        y += 44 + 14
+        y += 42 + 12
 
         self.toggle_tips = Toggle(
-            (x, y, inner_w, 30), 'Show tooltips', tooltips, fonts['small'],
+            (x, y, inner_w, 28), 'Show tooltips', tooltips, fonts['small'],
             _brighten(palette['panel'], 26), self.accent, self.text_color,
             on_change=callbacks.get('tooltips'))
-        y += 30 + 6
+        y += 28 + 4
         self.toggle_touch = Toggle(
-            (x, y, inner_w, 30), 'Tap to select  (touch)', touch,
+            (x, y, inner_w, 28), 'Tap to select  (touch)', touch,
             fonts['small'], _brighten(palette['panel'], 26), self.accent,
             self.text_color, on_change=callbacks.get('touch'))
-        y += 30 + 16
+        y += 28 + 14
 
         self._stats_y = y
-        self.PANEL_H = y + 24 + 3 * 22 + 22
+        self.PANEL_H = y + 22 + 3 * 21 + 24 + 22
         self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
 
-        self.widgets = [self.btn_continue, self.btn_restart, self.segmented,
-                        self.slider, self.btn_howto, self.btn_theme,
-                        self.toggle_tips, self.toggle_touch]
+        self.widgets = [self.btn_continue, self.btn_restart, self.seg_diff,
+                        self.seg_size, self.slider, self.btn_howto,
+                        self.btn_theme, self.toggle_tips, self.toggle_touch]
         self._panel_bg = self._build_bg()
 
     def _build_bg(self):
@@ -720,13 +736,14 @@ class MenuOverlay(_Overlay):
                    radius=24, border_color=_brighten(self.panel_color, 26))
         cx = self.PANEL_W // 2
         draw_text_spaced(surf, 'EINSTEIN', self.fonts['h1'], self.text_color,
-                         (cx, 50), spacing=4)
+                         (cx, 48), spacing=4)
         draw_text(surf, 'main menu', self.fonts['tiny'], self.muted,
-                  center=(cx, 78))
-        draw_text(surf, 'DIFFICULTY', self.fonts['tiny'], self.muted,
-                  topleft=(30, self._mode_label_y))
-        draw_text(surf, 'VOLUME', self.fonts['tiny'], self.muted,
-                  topleft=(30, self._vol_label_y))
+                  center=(cx, 74))
+        for label, ly in (('DIFFICULTY', self._diff_label_y),
+                          ('BOARD SIZE', self._size_label_y),
+                          ('VOLUME', self._vol_label_y)):
+            draw_text(surf, label, self.fonts['tiny'], self.muted,
+                      topleft=(30, ly))
         self._draw_progress(surf)
         return surf
 
@@ -735,25 +752,35 @@ class MenuOverlay(_Overlay):
         sy = self._stats_y
         draw_text(surf, 'PROGRESS', self.fonts['tiny'], self.muted,
                   topleft=(30, sy))
-        ry = sy + 24
+        ry = sy + 22
+        played = wins = total_time = 0
         for label, key in (('Easy', 'easy'), ('Normal', 'normal'),
                            ('Hard', 'hard')):
             entry = (self._stats or {}).get(key) or {}
-            levels = entry.get('levels', 0)
+            lv = entry.get('levels', 0)
             best = entry.get('best')
-            stars = entry.get('best_stars', 0) if levels else 0
+            stars = entry.get('best_stars', 0) if lv else 0
+            played += lv + entry.get('losses', 0)
+            wins += lv
+            total_time += entry.get('total_time', 0)
             draw_text(surf, label, self.fonts['small'], self.text_color,
                       topleft=(30, ry))
-            star_txt = '★' * stars + '☆' * (3 - stars)
-            draw_text(surf, star_txt, self.fonts['small'], STAR_GOLD,
-                      topleft=(94, ry))
-            draw_text(surf, '%d solved' % levels, self.fonts['small'],
-                      self.muted, center=(cx + 42, ry + 9))
+            draw_text(surf, '★' * stars + '☆' * (3 - stars),
+                      self.fonts['small'], STAR_GOLD, topleft=(92, ry))
+            draw_text(surf, ('%d%%' % entry.get('winrate', 0)) if lv else '—',
+                      self.fonts['small'], self.muted, center=(cx + 54, ry + 9))
             best_txt = _fmt_time(best) if best else '--:--'
             bw = self.fonts['small'].size(best_txt)[0]
             draw_text(surf, best_txt, self.fonts['small'], self.text_color,
                       topleft=(self.PANEL_W - 30 - bw, ry))
-            ry += 22
+            ry += 21
+        rate = int(round(100.0 * wins / played)) if played else 0
+        summary = '%d games  ·  %d won  ·  %s total' % (
+            played, rate, _fmt_time(total_time))
+        if wins == 0 and played == 0:
+            summary = 'no games played yet'
+        draw_text(surf, summary, self.fonts['tiny'], self.muted,
+                  center=(cx, ry + 12))
 
     def update(self, dt, mouse_pos):
         super().update(dt, mouse_pos)
@@ -872,234 +899,354 @@ class ResultOverlay(_Overlay):
 
 
 # --------------------------------------------------------------------------
-# tutorial
+# tutorial onboarding UI
 # --------------------------------------------------------------------------
-class TutorialOverlay(_Overlay):
-    """A short, paged how-to-play guide with simple drawn illustrations."""
+def draw_tutorial_progress(surface, x, y, width, tracker, fonts, palette,
+                           row_h=30):
+    """The 6-block onboarding tracker: one row per block, cleared blocks
+    struck through with a check, the current block on a highlight pill."""
+    accent = palette['accent']
+    text = palette['text']
+    muted = _brighten(palette['panel'], 70)
+    small = fonts['small']
+    tiny = fonts['tiny']
+    for i, (name, cleared, done, current) in enumerate(tracker):
+        ry = y + i * row_h
+        rh = row_h - 4
+        if current:
+            surface.blit(rounded_fill(width, rh,
+                                      _brighten(palette['panel'], 30), 8),
+                         (x, ry))
+        mcx, mcy = x + 15, ry + rh // 2
+        if done:
+            pygame.draw.circle(surface, accent, (mcx, mcy), 9)
+            chk = tiny.render('✓', True, (26, 24, 28))
+            surface.blit(chk, chk.get_rect(center=(mcx, mcy)))
+        elif current:
+            pygame.draw.circle(surface, accent, (mcx, mcy), 9, 2)
+        else:
+            pygame.draw.circle(surface, muted, (mcx, mcy), 8, 2)
+        name_col = text if (current or done) else muted
+        img = small.render(name, True, name_col)
+        nx = x + 32
+        surface.blit(img, (nx, mcy - img.get_height() // 2))
+        if done:
+            pygame.draw.line(surface, muted, (nx, mcy),
+                             (nx + img.get_width(), mcy), 2)
+        cnt = small.render('%d/3' % cleared, True,
+                           accent if current else name_col)
+        surface.blit(cnt, (x + width - cnt.get_width() - 8,
+                           mcy - cnt.get_height() // 2))
 
-    PANEL_W = 552
-    PANEL_H = 478
 
-    def __init__(self, screen_size, palette, fonts, on_done=None):
+class TutorialPopup(_Overlay):
+    """A small message panel — the welcome, a block intro, or a teaching note
+    on a mistake. One button dismisses it; an optional spotlight rings a part
+    of the board behind the dim."""
+
+    PANEL_W = 560
+
+    def __init__(self, screen_size, palette, fonts, text,
+                 button_label='Got it', on_done=None, tag='TUTORIAL',
+                 spotlight=None):
         super().__init__(screen_size, palette)
         self.fonts = fonts
         self._on_done = on_done
+        self._spotlight = spotlight
+        self._clock = 0.0
+        self._tag = tag
+        self._lines = wrap_text(text, fonts['small'], self.PANEL_W - 80)
+        self.PANEL_H = 66 + len(self._lines) * 23 + 24 + 46 + 30
         self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
-        self.page = 0
-        self.pages = self._build_pages()
-        self._rows = palette['rows']
-        pad = 30
-        inner_w = self.PANEL_W - pad * 2
-        half = (inner_w - 14) // 2
-        by = self.PANEL_H - pad - 46
-        self.btn_back = TextButton(
-            (pad, by, half, 46), 'Back', fonts['btn'],
-            self.btn_base, self.text_color, on_click=self._back, radius=12)
-        self.btn_next = TextButton(
-            (pad + half + 14, by, half, 46), 'Next', fonts['btn'],
-            self.accent, (28, 26, 30), on_click=self._next, radius=12)
-        self.btn_skip = TextButton(
-            (self.PANEL_W - pad - 84, 22, 84, 28), 'Skip', fonts['small'],
-            _brighten(palette['panel'], 30), self.muted,
-            on_click=self._finish, radius=8)
-        self.widgets = [self.btn_back, self.btn_next, self.btn_skip]
-        self._frame = self._build_frame()
-        self._refresh()
-
-    # ------- pages -------
-    @staticmethod
-    def _build_pages():
-        return [
-            {'title': 'The goal', 'illus': 0,
-             'body': 'The board is six rows of six cells. Every cell hides '
-                     'one symbol — clear away the wrong guesses until each '
-                     'cell shows just one.'},
-            {'title': 'Removing symbols', 'illus': 1,
-             'body': 'Click a candidate you can rule out and it pops away. '
-                     'When a single candidate is left, that cell is solved '
-                     'for you. A wrong removal costs a life.'},
-            {'title': 'Clue: same column', 'illus': 2,
-             'body': 'Two symbols joined by the up-down arrow live in the '
-                     'very same column of the grid.'},
-            {'title': 'Clue: left of', 'illus': 3,
-             'body': 'The dots mean the left symbol sits somewhere left of '
-                     'the right one — not necessarily right next to it.'},
-            {'title': 'Clue: neighbours', 'illus': 4,
-             'body': 'The side arrow means the two symbols are in '
-                     'neighbouring columns, touching each other.'},
-            {'title': 'Clue: three in a row', 'illus': 5,
-             'body': 'Three symbols with no marker fill three columns in a '
-                     'row, in the order shown, left to right.'},
-            {'title': 'Hints & winning', 'illus': 6,
-             'body': 'Hover a clue (or tap it in touch mode) to light up '
-                     'every cell it mentions. Three mistakes end the run; '
-                     'solve all 36 cells to win.'},
-        ]
-
-    # ------- navigation -------
-    def _refresh(self):
-        last = self.page >= len(self.pages) - 1
-        self.btn_next.label = 'Got it!' if last else 'Next'
-        self.btn_back.visible = self.btn_back.enabled = self.page > 0
-
-    def _next(self):
-        if self.page >= len(self.pages) - 1:
-            self._finish()
-        else:
-            self.page += 1
-            self._refresh()
-
-    def _back(self):
-        if self.page > 0:
-            self.page -= 1
-            self._refresh()
+        bw = 200
+        self.btn = TextButton(
+            ((self.PANEL_W - bw) // 2, self.PANEL_H - 30 - 46, bw, 46),
+            button_label, fonts['btn'], self.accent, (28, 26, 30),
+            on_click=self._finish, radius=12)
+        self.widgets = [self.btn]
+        self._bg = self._build_bg()
 
     def _finish(self):
         if self._on_done:
             self._on_done()
         self.close()
 
-    # ------- frame / draw -------
-    def _build_frame(self):
+    def _build_bg(self):
         surf = pygame.Surface((self.PANEL_W, self.PANEL_H), pygame.SRCALPHA)
         draw_panel(surf, (0, 0, self.PANEL_W, self.PANEL_H), self.panel_color,
-                   radius=24, border_color=_brighten(self.panel_color, 26))
+                   radius=22, border_color=_brighten(self.panel_color, 26))
+        cx = self.PANEL_W // 2
+        draw_text_spaced(surf, self._tag, self.fonts['tiny'], self.accent,
+                         (cx, 32), spacing=3)
+        ty = 66
+        for ln in self._lines:
+            draw_text(surf, ln, self.fonts['small'], self.text_color,
+                      center=(cx, ty))
+            ty += 23
         return surf
+
+    def _draw_dim(self, surface):
+        super()._draw_dim(surface)
+        if self._spotlight is not None:
+            p = 0.5 + 0.5 * math.sin(self._clock * 5.0)
+            r = pygame.Rect(self._spotlight).inflate(14 + 8 * p, 14 + 8 * p)
+            ring = rounded_border(r.w, r.h, self.accent, 18, 4)
+            a = int(255 * clamp01(self.anim))
+            if a < 255:
+                ring = ring.copy()
+                ring.set_alpha(a)
+            surface.blit(ring, r.topleft)
 
     def update(self, dt, mouse_pos):
         super().update(dt, mouse_pos)
+        self._clock += dt
         local = self._to_local(mouse_pos)
-        for wdg in self.widgets:
-            wdg.update(dt, local)
+        for w in self.widgets:
+            w.update(dt, local)
 
     def handle_event(self, event):
         self._route(event, self.widgets)
 
     def _panel_surface(self):
-        surf = self._frame.copy()
-        cx = self.PANEL_W // 2
-        page = self.pages[self.page]
-        draw_text(surf, page['title'], self.fonts['h1'], self.text_color,
-                  center=(cx, 52))
-        draw_text(surf, 'step %d / %d' % (self.page + 1, len(self.pages)),
-                  self.fonts['tiny'], self.muted, center=(cx, 80))
-        illus = pygame.Rect(44, 100, self.PANEL_W - 88, 170)
-        self._draw_illustration(surf, illus, page['illus'])
-        ly = 296
-        for line in wrap_text(page['body'], self.fonts['small'],
-                              self.PANEL_W - 96):
-            draw_text(surf, line, self.fonts['small'], self.muted,
-                      center=(cx, ly))
-            ly += 21
-        # page dots
-        n = len(self.pages)
-        for i in range(n):
-            col = self.accent if i == self.page else \
-                _brighten(self.panel_color, 42)
-            pygame.draw.circle(surf, col,
-                               (int(cx - (n - 1) * 8 + i * 16), 374), 4)
-        for wdg in self.widgets:
-            wdg.draw(surf)
+        surf = self._bg.copy()
+        for w in self.widgets:
+            w.draw(surf)
         return surf
 
-    # ------- illustrations -------
-    def _cell(self, surf, rect, color, sym, font=None, crossed=False,
-              ring=False, dim=False):
-        rect = pygame.Rect(rect)
-        c = lerp_color(color, self.panel_color, 0.55) if dim else color
-        surf.blit(rounded_fill(rect.w, rect.h, c, 9), rect.topleft)
-        if ring:
-            surf.blit(rounded_border(rect.w, rect.h, (245, 245, 250), 9, 3),
-                      rect.topleft)
-        if sym:
-            f = font or self.fonts['h1']
-            img = f.render(sym, True, (255, 255, 255))
-            surf.blit(img, img.get_rect(center=rect.center))
-        if crossed:
-            for a, b in (((rect.x + 9, rect.y + 9),
-                          (rect.right - 9, rect.bottom - 9)),
-                         ((rect.right - 9, rect.y + 9),
-                          (rect.x + 9, rect.bottom - 9))):
-                pygame.draw.line(surf, (236, 92, 92), a, b, 5)
 
-    def _grid(self, surf, area, cols=6, rows=2, cell=52):
-        """Faint column slots; returns a slot_rect(col, row) function."""
-        gap = 8
-        gw = cols * cell + (cols - 1) * gap
-        gh = rows * cell + (rows - 1) * gap
-        ox = area.centerx - gw // 2
-        oy = area.centery - gh // 2
-        slot = _brighten(self.panel_color, 16)
-        for c in range(cols):
-            for r in range(rows):
-                rx = ox + c * (cell + gap)
-                ry = oy + r * (cell + gap)
-                surf.blit(rounded_fill(cell, cell, slot, 8), (rx, ry))
+class TutorialResultOverlay(_Overlay):
+    """The tutorial's win plaque — no stars/time/score, a single button, and
+    a copy of the 6-block progress tracker."""
 
-        def slot_rect(col, row):
-            return pygame.Rect(ox + col * (cell + gap),
-                               oy + row * (cell + gap), cell, cell)
-        return slot_rect
+    PANEL_W = 480
 
-    def _draw_illustration(self, surf, area, idx):
-        rows = self._rows
-        big = self.fonts['h1']
-        if idx == 0:
-            slot = self._grid(surf, area, cols=6, rows=1)
-            syms = ['3', 'Ⅱ', 'C', '$', 'π', '+']
-            for c in range(6):
-                self._cell(surf, slot(c, 0), rows[c + 1], syms[c], big)
-        elif idx == 1:
-            slot = self._grid(surf, area, cols=6, rows=1)
-            a = slot(1, 0)
-            self._cell(surf, a, rows[2], '2', big)
-            b = slot(3, 0)
-            self._cell(surf, b, rows[2], '2', big, crossed=True)
-            c = slot(5, 0)
-            self._cell(surf, c, rows[4], 'D', big, ring=True)
-            ar = self.fonts['title']
-            draw_text(surf, '→', ar, self.muted,
-                      center=(area.centerx, a.centery))
-        elif idx == 2:                       # same column
-            slot = self._grid(surf, area, cols=6, rows=2)
-            for r in range(2):
-                hl = slot(2, r).inflate(10, 10)
-                surf.blit(rounded_border(hl.w, hl.h, self.accent, 11, 2),
-                          hl.topleft)
-            self._cell(surf, slot(2, 0), rows[1], '5', big)
-            self._cell(surf, slot(2, 1), rows[4], 'β', big)
-            draw_text(surf, '↕', self.fonts['title'], self.accent,
-                      center=(slot(2, 0).right + 40, area.centery))
-        elif idx == 3:                       # left of
-            slot = self._grid(surf, area, cols=6, rows=1)
-            a = slot(0, 0)
-            b = slot(4, 0)
-            self._cell(surf, a, rows[3], 'A', big)
-            self._cell(surf, b, rows[6], 'φ', big)
-            y = a.centery
-            pygame.draw.line(surf, self.accent, (a.right + 8, y),
-                             (b.x - 8, y), 3)
-            pygame.draw.polygon(surf, self.accent,
-                                [(b.x - 8, y), (b.x - 20, y - 7),
-                                 (b.x - 20, y + 7)])
-        elif idx == 4:                       # neighbours
-            slot = self._grid(surf, area, cols=6, rows=1)
-            for c in (2, 3):
-                hl = slot(c, 0).inflate(10, 10)
-                surf.blit(rounded_border(hl.w, hl.h, self.accent, 11, 2),
-                          hl.topleft)
-            self._cell(surf, slot(2, 0), rows[2], 'Ⅳ', big)
-            self._cell(surf, slot(3, 0), rows[5], 'π', big)
-        elif idx == 5:                       # three in a row
-            slot = self._grid(surf, area, cols=6, rows=1)
-            trio = [(2, rows[1], '1'), (3, rows[3], 'C'), (4, rows[6], '=')]
-            for c, col, sym in trio:
-                self._cell(surf, slot(c, 0), col, sym, big)
-        else:                                # hints & winning
-            cw = 96
-            r = pygame.Rect(area.centerx - cw // 2,
-                            area.centery - cw // 2, cw, cw)
-            self._cell(surf, r, rows[4], 'D', big, ring=True)
-            for i in range(3):
-                spr = make_heart(24, (228, 78, 92), True)
-                surf.blit(spr, (area.centerx - 38 + i * 28, area.bottom - 26))
+    def __init__(self, screen_size, palette, fonts, title, message, tracker,
+                 button_label='Continue', on_continue=None):
+        super().__init__(screen_size, palette)
+        self.fonts = fonts
+        self.title = title
+        self._tracker = tracker
+        self._clock = 0.0
+        self._on_continue = on_continue
+        self.accent_color = STAR_GOLD
+        self._msg_lines = (wrap_text(message, fonts['small'],
+                                     self.PANEL_W - 72) if message else [])
+        pad = 34
+        self._msg_y = 104
+        msg_h = len(self._msg_lines) * 22
+        self._track_label_y = self._msg_y + msg_h + 12
+        self._track_y = self._track_label_y + 24
+        by = self._track_y + len(tracker) * 30 + 18
+        self.btn = TextButton(
+            (pad, by, self.PANEL_W - pad * 2, 50), button_label,
+            fonts['btn'], self.accent, (28, 26, 30), on_click=self._go,
+            radius=13)
+        self.widgets = [self.btn]
+        self.PANEL_H = by + 50 + pad
+        self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
+        self._bg = self._build_bg()
+
+    def _go(self):
+        if self._on_continue:
+            self._on_continue()
+        self.close()
+
+    def _build_bg(self):
+        surf = pygame.Surface((self.PANEL_W, self.PANEL_H), pygame.SRCALPHA)
+        draw_panel(surf, (0, 0, self.PANEL_W, self.PANEL_H), self.panel_color,
+                   radius=24, border_color=self.accent_color)
+        cx = self.PANEL_W // 2
+        pygame.draw.rect(surf, self.accent_color, (cx - 34, 78, 68, 4),
+                         border_radius=2)
+        ty = self._msg_y
+        for ln in self._msg_lines:
+            draw_text(surf, ln, self.fonts['small'], self.text_color,
+                      center=(cx, ty))
+            ty += 22
+        draw_text(surf, 'TUTORIAL PROGRESS', self.fonts['tiny'], self.muted,
+                  center=(cx, self._track_label_y))
+        draw_tutorial_progress(surf, 34, self._track_y, self.PANEL_W - 68,
+                               self._tracker, self.fonts, self.palette)
+        return surf
+
+    def update(self, dt, mouse_pos):
+        super().update(dt, mouse_pos)
+        self._clock += dt
+        local = self._to_local(mouse_pos)
+        for w in self.widgets:
+            w.update(dt, local)
+
+    def handle_event(self, event):
+        self._route(event, self.widgets)
+
+    def _panel_surface(self):
+        surf = self._bg.copy()
+        cx = self.PANEL_W // 2
+        glow = 0.5 + 0.5 * math.sin(self._clock * 3.0)
+        title_col = lerp_color(self.accent_color,
+                               _brighten(self.accent_color, 45), glow)
+        draw_text_spaced(surf, self.title, self.fonts['h1'], title_col,
+                         (cx, 50), spacing=4)
+        for w in self.widgets:
+            w.draw(surf)
+        return surf
+
+
+class TutorialMenuOverlay(_Overlay):
+    """The in-tutorial menu: continue, restart the whole tutorial, skip it.
+    Game modes are shown locked; the 6-block tracker fills the lower half."""
+
+    PANEL_W = 440
+
+    def __init__(self, screen_size, palette, fonts, tracker, volume,
+                 callbacks):
+        super().__init__(screen_size, palette)
+        self.fonts = fonts
+        self._tracker = tracker
+        pad = 30
+        x = pad
+        inner_w = self.PANEL_W - pad * 2
+        y = 100
+        self.btn_continue = TextButton(
+            (x, y, inner_w, 50), 'Continue', fonts['btn'], self.accent,
+            (28, 26, 30), on_click=callbacks.get('continue'), radius=14)
+        y += 50 + 9
+        half = (inner_w - 10) // 2
+        self.btn_restart = TextButton(
+            (x, y, half, 42), 'Restart tutorial', fonts['small'],
+            self.btn_base, self.text_color,
+            on_click=callbacks.get('restart'), radius=12)
+        self.btn_skip = TextButton(
+            (x + half + 10, y, half, 42), 'Skip tutorial', fonts['small'],
+            self.btn_base, self.text_color, on_click=callbacks.get('skip'),
+            radius=12)
+        y += 42 + 16
+        self._diff_label_y = y
+        y += 20
+        self.seg_diff = Segmented(
+            (x, y, inner_w, 34), [('Easy', 0), ('Normal', 1), ('Hard', 2)],
+            0, fonts['small'], self.btn_base, self.accent, self.text_color)
+        self.seg_diff.enabled = False
+        y += 34 + 10
+        self.seg_size = Segmented(
+            (x, y, inner_w, 34), [('4 × 4', 4), ('5 × 5', 5), ('6 × 6', 6)],
+            2, fonts['small'], self.btn_base, self.accent, self.text_color)
+        self.seg_size.enabled = False
+        y += 34 + 10
+        self._vol_label_y = y
+        y += 20
+        self.slider = Slider(
+            (x, y + 4, inner_w - 56, 16), volume, fonts['small'],
+            _brighten(palette['panel'], 24), self.accent, self.text_color,
+            on_change=callbacks.get('volume'))
+        y += 16 + 20
+        self._track_label_y = y
+        self._track_y = y + 22
+        self.PANEL_H = self._track_y + 6 * 30 + 24
+        self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
+        self.widgets = [self.btn_continue, self.btn_restart, self.btn_skip,
+                        self.seg_diff, self.seg_size, self.slider]
+        self._bg = self._build_bg()
+
+    def _build_bg(self):
+        surf = pygame.Surface((self.PANEL_W, self.PANEL_H), pygame.SRCALPHA)
+        draw_panel(surf, (0, 0, self.PANEL_W, self.PANEL_H), self.panel_color,
+                   radius=24, border_color=_brighten(self.panel_color, 26))
+        cx = self.PANEL_W // 2
+        draw_text_spaced(surf, 'EINSTEIN', self.fonts['h1'], self.text_color,
+                         (cx, 46), spacing=4)
+        draw_text(surf, 'tutorial — modes unlock once it is done',
+                  self.fonts['tiny'], self.muted, center=(cx, 72))
+        draw_text(surf, 'LOCKED MODES', self.fonts['tiny'], self.muted,
+                  topleft=(30, self._diff_label_y))
+        draw_text(surf, 'VOLUME', self.fonts['tiny'], self.muted,
+                  topleft=(30, self._vol_label_y))
+        draw_text(surf, 'TUTORIAL PROGRESS', self.fonts['tiny'], self.muted,
+                  topleft=(30, self._track_label_y))
+        draw_tutorial_progress(surf, 30, self._track_y, self.PANEL_W - 60,
+                               self._tracker, self.fonts, self.palette)
+        return surf
+
+    def update(self, dt, mouse_pos):
+        super().update(dt, mouse_pos)
+        local = self._to_local(mouse_pos)
+        for w in self.widgets:
+            w.update(dt, local)
+
+    def handle_event(self, event):
+        self._route(event, self.widgets)
+
+    def _panel_surface(self):
+        surf = self._bg.copy()
+        for w in self.widgets:
+            w.draw(surf)
+        return surf
+
+
+class BlockSelectOverlay(_Overlay):
+    """Post-tutorial: pick one onboarding block to replay."""
+
+    PANEL_W = 420
+
+    def __init__(self, screen_size, palette, fonts, block_names,
+                 on_pick=None, on_close=None):
+        super().__init__(screen_size, palette)
+        self.fonts = fonts
+        self._on_pick = on_pick
+        self._on_close = on_close
+        pad = 30
+        x = pad
+        inner_w = self.PANEL_W - pad * 2
+        y = 96
+        self.widgets = []
+        for i, name in enumerate(block_names):
+            btn = TextButton((x, y, inner_w, 42),
+                             '%d.  %s' % (i + 1, name), fonts['btn'],
+                             self.btn_base, self.text_color, radius=12)
+            btn.on_click = (lambda idx=i: self._pick(idx))
+            self.widgets.append(btn)
+            y += 42 + 8
+        y += 6
+        self.btn_close = TextButton(
+            (x, y, inner_w, 46), 'Back', fonts['btn'], self.accent,
+            (28, 26, 30), on_click=self._close, radius=12)
+        self.widgets.append(self.btn_close)
+        self.PANEL_H = y + 46 + pad
+        self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
+        self._bg = self._build_bg()
+
+    def _pick(self, idx):
+        if self._on_pick:
+            self._on_pick(idx)
+        self.close()
+
+    def _close(self):
+        if self._on_close:
+            self._on_close()
+        self.close()
+
+    def _build_bg(self):
+        surf = pygame.Surface((self.PANEL_W, self.PANEL_H), pygame.SRCALPHA)
+        draw_panel(surf, (0, 0, self.PANEL_W, self.PANEL_H), self.panel_color,
+                   radius=24, border_color=_brighten(self.panel_color, 26))
+        cx = self.PANEL_W // 2
+        draw_text_spaced(surf, 'TUTORIAL', self.fonts['h1'], self.text_color,
+                         (cx, 44), spacing=4)
+        draw_text(surf, 'replay any block', self.fonts['tiny'], self.muted,
+                  center=(cx, 68))
+        return surf
+
+    def update(self, dt, mouse_pos):
+        super().update(dt, mouse_pos)
+        local = self._to_local(mouse_pos)
+        for w in self.widgets:
+            w.update(dt, local)
+
+    def handle_event(self, event):
+        self._route(event, self.widgets)
+
+    def _panel_surface(self):
+        surf = self._bg.copy()
+        for w in self.widgets:
+            w.draw(surf)
+        return surf

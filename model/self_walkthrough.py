@@ -131,7 +131,12 @@ class SelfWalkthrough(object):
 
 #----------------проверки по правилам----------------------------------------------
 
+    def _in_bounds(self, y, x):
+        return 0 <= y < self._size and 0 <= x < self._size
+
     def _num_in_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return False
         if type(self._field[y][x]) == int:
             return n == self._field[y][x]
         elif n in self._field[y][x]:
@@ -260,6 +265,8 @@ class SelfWalkthrough(object):
                             self._remove_all_batton_in_row(row, other_number)
 
     def _define_this_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return
         if type(self._field[y][x]) == list:
             self._undefined_count -= 1
             self._field[y][x] = n
@@ -286,6 +293,8 @@ class SelfWalkthrough(object):
             self._check_row(row, btn)
 
     def _remove_number_in_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return
         if type(self._field[y][x]) == list:
             if n in self._field[y][x]:
                 self._field[y][x].remove(n)
