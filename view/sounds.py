@@ -18,8 +18,8 @@ _SOUND_KEYS = ['hover', 'spread', 'click', 'pick', 'solve', 'wrong',
 # Tuned against the normalised SFX bank (every file peaks at -3 dBFS), so
 # these set the *mix*: subtle UI ticks, prominent game events.
 _SOUND_GAIN = {
-    'hover': 0.50, 'spread': 0.50, 'click': 0.80, 'pick': 0.60,
-    'solve': 0.80, 'wrong': 0.85, 'win': 1.0, 'lose': 0.85, 'start': 0.72,
+    'hover': 0.25, 'spread': 0.45, 'click': 0.80, 'pick': 0.60,
+    'solve': 0.80, 'wrong': 0.85, 'win': 0.95, 'lose': 0.90, 'start': 0.72,
 }
 
 # Minimum gap (seconds) between repeats of the same sound, so fast cascades

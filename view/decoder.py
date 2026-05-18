@@ -45,20 +45,33 @@ def symbol_for(value):
     return decode_symbol.get(value, '?')
 
 
-def describe_rule(values):
-    """A plain-language reading of a displayed rule (its 3 cell values).
+def rule_segments(values):
+    """Structured reading of a rule for the tooltip: a list of segments,
+    each ('text', str) or ('cell', value). 'cell' segments render as a small
+    coloured tile (the real board colour), not just the bare glyph.
 
     Markers: '^' same column, '<->' neighbouring columns, '...' left-of.
-    Three integers instead mean three consecutive columns, left to right.
+    Three integers instead mean three consecutive columns, in that order
+    read either left-to-right or right-to-left.
     """
     a, b, c = values
     if b == '^':
-        return '%s is in the same column as %s' % (symbol_for(a),
-                                                   symbol_for(c))
+        return [('cell', a), ('text', 'is in the same column as'),
+                ('cell', c)]
     if b == '<->':
-        return '%s and %s are in neighbouring columns' % (symbol_for(a),
-                                                          symbol_for(c))
+        return [('cell', a), ('text', 'and'), ('cell', c),
+                ('text', 'are in neighbouring columns')]
     if b == '...':
-        return '%s is somewhere left of %s' % (symbol_for(a), symbol_for(c))
-    return '%s, %s, %s fill three columns, left to right' % (
-        symbol_for(a), symbol_for(b), symbol_for(c))
+        return [('cell', a), ('text', 'is somewhere to the left of'),
+                ('cell', c)]
+    return [('cell', a), ('cell', b), ('cell', c),
+            ('text', 'fill three columns in a row, in this order —'),
+            ('text', 'left-to-right or right-to-left')]
+
+
+def describe_rule(values):
+    """The same reading as rule_segments(), flattened to a plain string."""
+    out = []
+    for kind, val in rule_segments(values):
+        out.append(symbol_for(val) if kind == 'cell' else val)
+    return ' '.join(out)

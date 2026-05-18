@@ -27,7 +27,7 @@ async def main():
     palette = os.environ.get('PALETTE', 'mocha')
     game = Game(palette_name=palette)
     try:
-        await game.run(complexity=20)
+        await game.run()
     finally:
         pygame.quit()
 

@@ -386,7 +386,9 @@ class Effects:
                                life=0.8, width=8))
         self.rings.append(Ring(cx, cy, (255, 255, 255), max_radius=300,
                                life=0.6, width=4))
-        for _ in range(26):
+        # particle counts kept modest so the wasm/web frame rate (and with
+        # it the audio thread) does not stall during the win flourish
+        for _ in range(16):
             ang = random.uniform(-math.pi, 0)
             sp = random.uniform(260, 560)
             self.particles.append(Particle(
@@ -395,7 +397,7 @@ class Effects:
                                (255, 255, 255)]),
                 random.uniform(0.7, 1.3), size=6, gravity=420,
                 shape='spark'))
-        self.confetti(60)
+        self.confetti(34)
 
     def defeat(self):
         """Lose flourish: a heavy thud, dark-red vignette settles in."""

@@ -1,4 +1,5 @@
-"""Persistent per-difficulty progress: levels solved and the best time.
+"""Persistent per-difficulty progress: wins, losses, best time, best score,
+best star grade and total play time — enough for a win rate and an average.
 
 Stored as JSON. On the desktop it lives in the user's home directory; in the
 pygbag/web build it is kept in the browser's localStorage. Every access is
@@ -10,16 +11,26 @@ import os
 import sys
 
 
-_COMPLEXITY_KEY = {20: 'easy', 10: 'normal', 0: 'hard'}
+_DIFF_KEY = {0: 'easy', 1: 'normal', 2: 'hard'}
 _IS_WEB = sys.platform == 'emscripten'
 _STORE_KEY = 'einsteingame_stats'
 
-# Par time (seconds) per difficulty — beating it earns the third star.
-_PAR_SECONDS = {20: 80, 10: 150, 0: 250}
+# Par time (seconds) per (board size, difficulty index) — beating it earns
+# the third star. Bigger boards and harder modes get more room.
+_PAR = {
+    4: (45, 75, 120),
+    5: (70, 120, 185),
+    6: (95, 165, 255),
+}
+_SIZE_WEIGHT = {4: 0.7, 5: 0.85, 6: 1.0}
+
+_FIELDS = ('levels', 'losses', 'best', 'best_score', 'best_stars',
+           'total_time')
 
 
 def _empty_entry():
-    return {'levels': 0, 'best': None, 'best_score': 0, 'best_stars': 0}
+    return {'levels': 0, 'losses': 0, 'best': None, 'best_score': 0,
+            'best_stars': 0, 'total_time': 0}
 
 
 def _empty():
@@ -27,15 +38,17 @@ def _empty():
             'hard': _empty_entry()}
 
 
-def score_and_stars(complexity, seconds, mistakes):
-    """Rate a finished round. Score rewards speed and a clean run; stars are
-    a 1-3 grade (winning at all is always worth at least one)."""
-    par = _PAR_SECONDS.get(complexity, 150)
+def score_and_stars(size, difficulty, seconds, mistakes, hints=0):
+    """Rate a finished round. Score rewards speed and a clean run and scales
+    with board size; stars are a 1-3 grade (a win is always worth one)."""
+    par = _PAR.get(size, _PAR[6])[difficulty]
     seconds = max(1, int(seconds))
     mistakes = max(0, int(mistakes))
-    score = 3000 - int(seconds * 3.0) - mistakes * 450
+    hints = max(0, int(hints))
+    score = 3000 - int(seconds * 3.0) - mistakes * 450 - hints * 250
+    score = int(score * _SIZE_WEIGHT.get(size, 1.0))
     score = max(50, score)
-    if mistakes == 0 and seconds <= par:
+    if mistakes == 0 and hints == 0 and seconds <= par:
         stars = 3
     elif mistakes <= 1 and seconds <= par * 2:
         stars = 2
@@ -74,21 +87,20 @@ class Stats(object):
             stored = json.loads(str(raw))
         except (ValueError, TypeError):
             return
+        if not isinstance(stored, dict):
+            return
         for key in self._data:
-            entry = stored.get(key) if isinstance(stored, dict) else None
+            entry = stored.get(key)
             if not isinstance(entry, dict):
                 continue
-            try:
-                self._data[key]['levels'] = max(0, int(entry.get('levels', 0)))
-            except (ValueError, TypeError):
-                pass
-            best = entry.get('best')
-            if isinstance(best, (int, float)) and best > 0:
-                self._data[key]['best'] = int(best)
-            for fld in ('best_score', 'best_stars'):
+            for fld in ('levels', 'losses', 'best_score', 'best_stars',
+                        'total_time'):
                 val = entry.get(fld)
                 if isinstance(val, (int, float)) and val > 0:
                     self._data[key][fld] = int(val)
+            best = entry.get('best')
+            if isinstance(best, (int, float)) and best > 0:
+                self._data[key]['best'] = int(best)
 
     def _save(self):
         try:
@@ -103,15 +115,16 @@ class Stats(object):
             pass
 
     # ------------------------------------------------------------------
-    def record_win(self, complexity, seconds, score=0, stars=0):
-        """Count one solved level; keep the fastest time, top score and best
-        star grade for its mode."""
-        key = _COMPLEXITY_KEY.get(complexity)
+    def record_win(self, difficulty, seconds, score=0, stars=0):
+        """Count one solved level; keep the fastest time, top score, best
+        star grade and accumulate total play time for its mode."""
+        key = _DIFF_KEY.get(difficulty)
         if key is None:
             return
         entry = self._data[key]
         entry['levels'] += 1
-        seconds = int(seconds)
+        seconds = max(0, int(seconds))
+        entry['total_time'] += seconds
         if seconds > 0 and (entry['best'] is None or seconds < entry['best']):
             entry['best'] = seconds
         if int(score) > entry.get('best_score', 0):
@@ -120,6 +133,22 @@ class Stats(object):
             entry['best_stars'] = int(stars)
         self._save()
 
+    def record_loss(self, difficulty):
+        key = _DIFF_KEY.get(difficulty)
+        if key is None:
+            return
+        self._data[key]['losses'] += 1
+        self._save()
+
     def summary(self):
-        """A fresh copy safe to hand to the view layer."""
-        return {k: dict(v) for k, v in self._data.items()}
+        """A fresh copy for the view, with a win rate and average time added
+        to every entry."""
+        out = {}
+        for key, entry in self._data.items():
+            e = dict(entry)
+            wins, losses = e['levels'], e['losses']
+            games = wins + losses
+            e['winrate'] = int(round(100.0 * wins / games)) if games else 0
+            e['avg'] = int(round(e['total_time'] / wins)) if wins else 0
+            out[key] = e
+        return out

@@ -7,8 +7,8 @@ class FieldAndRules(object):
     '''
     Этот класс генерирует финальное поле и логические условия игры.
     '''
-    def __init__(self, comlexity):
-        self._size = 6
+    def __init__(self, comlexity, size=6):
+        self._size = size
         self._final_field = self._generate_final_field()
         self._rules = []
         self._defined_start_cells_count = comlexity
@@ -46,10 +46,10 @@ class FieldAndRules(object):
         return data
 
     def _generate_start_rules(self):
-        self._min_nums = [] # 30 рандомных ячеек, по 5 из каждого ряда. Необходимый минимум для логических условий
-        for row in range(6):
-            random_inds = list(range(6))
-            random_inds.remove(randint(0, 5))
+        self._min_nums = [] # N*(N-1) ячеек, по N-1 из каждого ряда. Необходимый минимум для логических условий
+        for row in range(self._size):
+            random_inds = list(range(self._size))
+            random_inds.remove(randint(0, self._size - 1))
             for column in random_inds:
                 self._min_nums.append((row, column))
 
@@ -70,7 +70,8 @@ class FieldAndRules(object):
                     self._create_start_rule(num, rand_num)
                 else: # создание правила с последней ячейкой (при наличии)
                     self._min_nums.remove(num)
-                    self._create_start_rule(num, (randint(0, 5), randint(0, 5)))
+                    self._create_start_rule(num, (randint(0, self._size - 1),
+                                                  randint(0, self._size - 1)))
 
     def _initialize_self_walkthrough(self):
         self._walkthrough_game = SelfWalkthrough(self._rules, self._size)
@@ -116,44 +117,45 @@ class FieldAndRules(object):
             self._rules.append([self._final_field[y1][x1], '<->', self._final_field[y2][x2]])
         elif rule_type == 4: # 3 в ряд
             x_mid = (x1 + x2) // 2
-            y_mid = randint(0, 5)
+            y_mid = randint(0, self._size - 1)
             if (y_mid, x_mid) in self._min_nums:
                 self._min_nums.remove((y_mid, x_mid))
             self._rules.append([self._final_field[y1][x1], self._final_field[y_mid][x_mid], self._final_field[y2][x2]])
 
     def _create_rule(self, rule_type): # создание рандомного правила
-        y = randint(0, 5)
-        x = randint(0, 5)
+        last = self._size - 1
+        y = randint(0, last)
+        x = randint(0, last)
         if rule_type == 1: # в одном столбце
             y2 = y
             while y2 == y:
-                y2 = randint(0, 5)
+                y2 = randint(0, last)
             return [self._final_field[y][x], '^', self._final_field[y2][x]]
         elif rule_type == 2: # порядок
-            x1 = randint(0, 4)
-            x2 = randint(x1 + 1, 5)
-            y2 = randint(0, 5)
+            x1 = randint(0, last - 1)
+            x2 = randint(x1 + 1, last)
+            y2 = randint(0, last)
             return [self._final_field[y][x1], '...', self._final_field[y2][x2]]
         elif rule_type == 3: # рядом
             if x == 0:
                 x2 = 1
-            elif x == 5:
-                x2 = 4
+            elif x == last:
+                x2 = last - 1
             else:
                 x2 = x + choice([-1, 1])
-            y2 = randint(0, 5)
+            y2 = randint(0, last)
             return [self._final_field[y][x], '<->', self._final_field[y2][x2]]
         elif rule_type == 4: # 3 в ряд
-            if x < 2:
+            if x <= 1:
                 dx = 1
-            elif x > 3:
+            elif x >= self._size - 2:
                 dx = -1
             else:
                 dx = choice([-1, 1])
             x2 = x + dx
             x3 = x2 + dx
-            y2 = randint(0, 5)
-            y3 = randint(0, 5)
+            y2 = randint(0, last)
+            y3 = randint(0, last)
             return [self._final_field[y][x], self._final_field[y2][x2], self._final_field[y3][x3]]
 
     def __getitem__(self, index):
