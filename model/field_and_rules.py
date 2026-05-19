@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import random
 from random import randint, choice
 from model.self_walkthrough import SelfWalkthrough
 
@@ -6,15 +7,32 @@ from model.self_walkthrough import SelfWalkthrough
 class FieldAndRules(object):
     '''
     Этот класс генерирует финальное поле и логические условия игры.
+
+    A `seed` makes the whole board reproducible: the same (complexity, size,
+    seed) always yields the identical puzzle — this is what the Daily Puzzle
+    and "retry this exact board" both rely on.
     '''
-    def __init__(self, comlexity, size=6):
-        self._size = size
-        self._final_field = self._generate_final_field()
-        self._rules = []
-        self._defined_start_cells_count = comlexity
-        self._defined_start_cells = []
-        self._generate_start_rules()
-        self._initialize_self_walkthrough()
+    def __init__(self, comlexity, size=6, seed=None):
+        self._seed = seed
+        state = None
+        if seed is not None:
+            state = random.getstate()
+            random.seed(seed)
+        try:
+            self._size = size
+            self._final_field = self._generate_final_field()
+            self._rules = []
+            self._defined_start_cells_count = comlexity
+            self._defined_start_cells = []
+            self._generate_start_rules()
+            self._initialize_self_walkthrough()
+        finally:
+            if state is not None:
+                random.setstate(state)
+
+    @property
+    def seed(self):
+        return self._seed
 
     @property
     def field(self):

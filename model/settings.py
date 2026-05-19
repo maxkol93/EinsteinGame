@@ -15,7 +15,7 @@ _STORE_KEY = 'einsteingame_settings'
 
 _PALETTES = ('mocha', 'nord', 'sunset')
 _DIFFICULTIES = (0, 1, 2)        # easy / normal / hard
-_SIZES = (4, 5, 6)
+_SIZES = (3, 4, 5, 6)            # 3x3 is the "Quick" board
 
 _DEFAULTS = {
     'volume': 0.7,
@@ -24,6 +24,8 @@ _DEFAULTS = {
     'size': 6,
     'tooltips': True,
     'touch': False,
+    # Zen mode — mistakes never end the run; the board is a calm solve
+    'zen': False,
     # how many of the 6 onboarding blocks the player has cleared (0..6).
     # 6 means the whole tutorial is done and every game mode is unlocked.
     'tutorial_blocks': 0,
@@ -86,7 +88,7 @@ class Settings(object):
                 self._data['size'] = sz
         except (ValueError, TypeError):
             pass
-        for flag in ('tooltips', 'touch'):
+        for flag in ('tooltips', 'touch', 'zen'):
             if flag in stored:
                 self._data[flag] = bool(stored[flag])
         # tutorial progress — a 0..6 block count. Accept the legacy boolean

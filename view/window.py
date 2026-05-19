@@ -14,7 +14,7 @@ from view.anim import clamp01, ease_out_back, ease_out_cubic, lerp
 from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
                      draw_text, draw_tutorial_progress, TutorialPopup,
                      TutorialResultOverlay, TutorialMenuOverlay,
-                     BlockSelectOverlay, set_click_sfx)
+                     BlockSelectOverlay, AchievementsOverlay, set_click_sfx)
 from view.decoder import rule_segments, symbol_for
 from model.tutorial import BLOCK_NAMES
 import view.buttons as buttons_mod
@@ -130,10 +130,13 @@ def _make_gradient_surface(size, base, top_factor=1.30, bottom_factor=0.65,
 
 class GameWindow(object):
     def __init__(self, rules, palette_name='mocha', sounds=None,
-                 difficulty=0, size=DEFAULT_SIZE, tutorial=False):
+                 difficulty=0, size=DEFAULT_SIZE, tutorial=False, zen=False):
         # tutorial mode swaps the left panel for a 6-block progress tracker
         # and hides the timer, lives, solved count and hint button.
         self._tutorial = tutorial
+        # zen mode: mistakes never end the run, so the left panel shows a
+        # calm "ZEN" badge in place of the lives hearts
+        self._zen = zen
         self._tut_tracker = []
         self._tut_block_name = ''
         self._base_dir = os.path.dirname(__file__)
@@ -146,6 +149,7 @@ class GameWindow(object):
         self._sounds = sounds
         self._difficulty = difficulty   # 0/1/2 — easy/normal/hard
         self._sel_size = size           # board size selected for next restart
+        self._mode_label = ''           # left-panel MODE footer text
 
         # board geometry — cell size and candidate sub-grid follow the size
         self._size = size
@@ -206,6 +210,7 @@ class GameWindow(object):
 
         self._overlay = None       # MenuOverlay / ResultOverlay
         self._menu_finished = False  # menu opened over a won/lost board
+        self._menu_daily = None      # Daily-Puzzle status for the menu
         self._confetti_timer = 0.0
         self._stats_summary = None
 
@@ -222,13 +227,18 @@ class GameWindow(object):
         self.on_field_define = None
         self.on_rule_click = None
         self.on_continue = None
-        self.on_restart = None
+        self.on_restart = None         # deal a fresh board
+        self.on_retry = None           # replay the exact same board
+        self.on_daily = None           # start today's Daily Puzzle
+        self.on_achievements = None    # open the badges screen
+        self.on_share = None           # copy the result line
         self.on_mode_select = None
         self.on_size_select = None
         self.on_open_menu = None
         self.on_volume = None
         self.on_tooltips = None
         self.on_touch = None
+        self.on_zen = None
         self.on_theme = None
         self.on_hint = None
         self.on_block_replay = None    # tutorial: replay a chosen block
@@ -352,6 +362,11 @@ class GameWindow(object):
     def set_sel_size(self, size):
         self._sel_size = size
 
+    def set_mode_label(self, text):
+        """The left-panel MODE footer text — what this board actually is
+        (a difficulty, a Daily, a Zen run), independent of the menu picks."""
+        self._mode_label = text
+
     def set_stats(self, summary):
         """Per-difficulty progress, shown by the menu overlay."""
         self._stats_summary = summary
@@ -460,14 +475,18 @@ class GameWindow(object):
 
     # --------------------------- overlays ----------------------------
 
-    def open_menu(self, finished=False):
+    def open_menu(self, finished=False, daily=None):
         self._effects.calm()
         self._armed = None
         self._menu_finished = finished
+        self._menu_daily = daily
         vol = self._sounds.volume if self._sounds else 0.7
         callbacks = {
             'continue': self._menu_continue,
             'restart': lambda: self.on_restart and self.on_restart(),
+            'daily': self._menu_daily_start,
+            'achievements': lambda: (self.on_achievements
+                                     and self.on_achievements()),
             'mode': lambda d: self.on_mode_select and self.on_mode_select(d),
             'size': lambda s: self.on_size_select and self.on_size_select(s),
             'tutorial': self.open_tutorial,
@@ -475,13 +494,34 @@ class GameWindow(object):
             'theme': self._menu_theme,
             'tooltips': self._menu_tooltips,
             'touch': self._menu_touch,
+            'zen': self._menu_zen,
         }
         self._overlay = MenuOverlay((CANVAS_WIDTH, CANVAS_HEIGHT),
                                     self._palette, self._ui_fonts,
                                     self._difficulty, self._sel_size, vol,
-                                    callbacks, stats=self._stats_summary,
-                                    tooltips=self._tooltips_enabled,
-                                    touch=self._touch_mode, finished=finished)
+                                    callbacks, tooltips=self._tooltips_enabled,
+                                    touch=self._touch_mode, zen=self._zen,
+                                    finished=finished, daily=daily)
+
+    def _menu_daily_start(self):
+        self.close_overlay()
+        if self.on_daily:
+            self.on_daily()
+
+    def _menu_zen(self, value):
+        # only persist the choice — the live board keeps the rules it was
+        # built with; Zen takes effect on the next New game
+        if self.on_zen:
+            self.on_zen(bool(value))
+
+    def open_achievements(self, unlocked, summary):
+        """The badges screen — opened from the menu."""
+        self._armed = None
+        self._overlay = AchievementsOverlay(
+            (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
+            set(unlocked or []), summary or {},
+            on_close=lambda: self.open_menu(self._menu_finished,
+                                            self._menu_daily))
 
     def open_tutorial(self):
         """Menu 'Tutorial' button (post-onboarding): pick a block to replay."""
@@ -490,7 +530,8 @@ class GameWindow(object):
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             list(BLOCK_NAMES),
             on_pick=lambda i: self.on_block_replay and self.on_block_replay(i),
-            on_close=self.open_menu)
+            on_close=lambda: self.open_menu(self._menu_finished,
+                                            self._menu_daily))
 
     # --------------------- tutorial overlays -------------------------
 
@@ -544,23 +585,29 @@ class GameWindow(object):
         if self.on_touch:
             self.on_touch(bool(value))
 
-    def show_win(self, stars=0, score=0, best_score=0):
+    def _result_callbacks(self):
+        return {
+            'menu': lambda: self.on_open_menu and self.on_open_menu(),
+            'retry': lambda: self.on_retry and self.on_retry(),
+            'new': lambda: self.on_restart and self.on_restart(),
+            'share': lambda: self.on_share and self.on_share(),
+        }
+
+    def show_win(self, stars=0, score=0, best_score=0, badges=None,
+                 daily=None):
         msg = choice(_WIN_MSGS)
         self._overlay = ResultOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
-            True, msg, self._timer_text,
-            {'menu': lambda: self.on_open_menu and self.on_open_menu(),
-             'restart': lambda: self.on_restart and self.on_restart()},
-            stars=stars, score=score, best_score=best_score)
+            True, msg, self._timer_text, self._result_callbacks(),
+            stars=stars, score=score, best_score=best_score,
+            badges=list(badges or []), daily=daily)
         self._effects.celebrate()
 
     def show_lose(self):
         msg = choice(_LOOSE_MSGS)
         self._overlay = ResultOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
-            False, msg, self._timer_text,
-            {'menu': lambda: self.on_open_menu and self.on_open_menu(),
-             'restart': lambda: self.on_restart and self.on_restart()})
+            False, msg, self._timer_text, self._result_callbacks())
         self._effects.defeat()
 
     def close_overlay(self):
@@ -1291,6 +1338,8 @@ class GameWindow(object):
         return cx, cy
 
     def _complexity_name(self):
+        if self._mode_label:
+            return self._mode_label
         name = ('EASY', 'NORMAL', 'HARD')[max(0, min(2, self._difficulty))]
         return '%s  ·  %d×%d' % (name, self._size, self._size)
 
@@ -1331,10 +1380,17 @@ class GameWindow(object):
         draw_text(surface, self._timer_text, self._font_timer,
                   self._timer_color, center=(cx, 140))
 
-        # lives
-        draw_text(surface, 'L I V E S', self._font_label, muted,
-                  center=(cx, self.HEARTS_Y - 24))
-        self._draw_hearts(surface)
+        # lives — or a calm ZEN badge when mistakes cannot end the run
+        if self._zen:
+            draw_text(surface, 'Z E N', self._font_label, muted,
+                      center=(cx, self.HEARTS_Y - 24))
+            draw_text(surface, 'no game over', self._ui_fonts['small'],
+                      self._palette['accent'],
+                      center=(cx, self.HEARTS_Y + 12))
+        else:
+            draw_text(surface, 'L I V E S', self._font_label, muted,
+                      center=(cx, self.HEARTS_Y - 24))
+            self._draw_hearts(surface)
 
         # how much of the board is solved
         self._draw_progress(surface)
