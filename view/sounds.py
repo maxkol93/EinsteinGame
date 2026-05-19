@@ -22,11 +22,16 @@ _SOUND_GAIN = {
     'solve': 0.80, 'wrong': 0.85, 'win': 0.95, 'lose': 0.90, 'start': 0.72,
 }
 
-# Minimum gap (seconds) between repeats of the same sound, so fast cascades
-# don't turn into a machine-gun (or stack into clipping).
+# Minimum gap (seconds) between repeats of the *same* sound. Every effect is
+# throttled now — a rapid burst of identical triggers (a cascade of pops, a
+# spammed wrong click, the hover ticking as the cursor sweeps the board) used
+# to fire several copies a few milliseconds apart, which comb-filters into a
+# flange-y "the sound played three times" mush and stacks toward clipping.
 _SOUND_THROTTLE = {
-    'hover': 0.05, 'spread': 0.20, 'pick': 0.06, 'solve': 0.0,
+    'hover': 0.06, 'spread': 0.18, 'click': 0.06, 'pick': 0.045,
+    'solve': 0.05, 'wrong': 0.15, 'win': 0.30, 'lose': 0.30, 'start': 0.20,
 }
+_DEFAULT_THROTTLE = 0.06
 
 
 class SoundManager(object):
@@ -90,13 +95,18 @@ class SoundManager(object):
         snd = self._sounds.get(key)
         if snd is None:
             return
-        gap = _SOUND_THROTTLE.get(key, 0.0)
+        gap = _SOUND_THROTTLE.get(key, _DEFAULT_THROTTLE)
         if gap > 0.0:
             last = self._last_play.get(key, -1e9)
             if (self._clock_ms - last) < gap * 1000.0:
                 return
         self._last_play[key] = self._clock_ms
         try:
+            # Cut any still-ringing copy of this same effect before replaying
+            # it. Two identical samples a few ms apart phase-cancel into a
+            # hollow, flange-y artefact and their amplitudes sum toward
+            # clipping; one clean voice per effect always sounds right.
+            snd.stop()
             snd.play()
         except pygame.error:
             pass

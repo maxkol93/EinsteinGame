@@ -148,31 +148,49 @@ def _solver_wins(rules):
     return walk.is_won
 
 
-# Per level (0/1/2): how many clues, and how many cells start given. Fewer
-# givens + more clues each level — the player deduces 1, then 2, then 3 cells.
+def _clue_cells(solution, clue):
+    """The board cells (y, x) a clue refers to. Marker strings ('^', '<->',
+    '...') are skipped; a three-in-a-row clue contributes all three cells."""
+    cells = []
+    for value in clue:
+        if isinstance(value, int):
+            y = value // 10 - 1
+            cells.append((y, solution[y].index(value)))
+    return cells
+
+
+def _clue_is_useful(solution, clue, open_cells):
+    """True if the clue points at a cell the player still has to solve.
+
+    A clue whose cells are *all* pre-revealed is already satisfied on the
+    board — it teaches nothing and only clutters the clue panel — so it is
+    rejected here at generation time."""
+    return any(c in open_cells for c in _clue_cells(solution, clue))
+
+
+# Per level (0/1/2): how many clues each level carries. The board is laid
+# out (see `_open_cells_in_rows`) so the level always costs exactly
+# `level + 1` clicks to solve — level 0 -> 1 click, level 1 -> 2, level 2 -> 3.
 _CLUE_COUNT = {0: 1, 1: 2, 2: 3}
-_GIVEN_COUNT = {0: 7, 1: 6, 2: 4}
 
 
-def _entry_open_cells(level):
-    """Which cells start unsolved in an Entry level — kept inside as few rows
-    as possible so the cascade has a clean job to finish."""
-    rows = list(range(SIZE))
-    random.shuffle(rows)
-    if level == 0:                       # one row, 2 open cells
-        cols = random.sample(range(SIZE), 2)
-        return {(rows[0], c) for c in cols}
-    if level == 1:                       # one full open row
-        return {(rows[0], c) for c in range(SIZE)}
-    # level 2 — one full open row plus 2 more in a second row (5 cells)
-    cells = {(rows[0], c) for c in range(SIZE)}
-    cells |= {(rows[1], c) for c in random.sample(range(SIZE), 2)}
+def _open_cells_in_rows(n_rows):
+    """Pick `n_rows` distinct rows and open exactly two cells in each.
+
+    A row with two open cells always takes exactly one click to clear — pop
+    one of the two leftover candidates and the row cascades shut — and the
+    board's rows resolve independently of each other. A board laid out this
+    way therefore always costs exactly `n_rows` clicks to solve."""
+    cells = set()
+    for ry in random.sample(range(SIZE), n_rows):
+        for cx in random.sample(range(SIZE), 2):
+            cells.add((ry, cx))
     return cells
 
 
 def _generate_entry(level):
     solution = _random_solution()
-    open_cells = _entry_open_cells(level)
+    open_cells = _open_cells_in_rows(level + 1)
     given = [(y, x) for y in range(SIZE) for x in range(SIZE)
              if (y, x) not in open_cells]
     return TutorialLevel(0, level, solution, _define_rules(solution, given),
@@ -190,17 +208,21 @@ def _markers_for(block, count):
     return picks
 
 
-def _make_clues(solution, block, count):
+def _make_clues(solution, block, count, open_cells):
     """`count` distinct clues of the block's rule type, all true for the
-    solution. None if a distinct set could not be drawn."""
+    solution and each pointing at a still-unsolved cell. None if such a
+    distinct set could not be drawn."""
     markers = _markers_for(block, count)
     clues = []
     for marker in markers:
-        for _ in range(24):
+        for _ in range(60):
             clue = _true_clue(solution, marker)
-            if clue not in clues:
-                clues.append(clue)
-                break
+            if clue in clues:
+                continue
+            if not _clue_is_useful(solution, clue, open_cells):
+                continue
+            clues.append(clue)
+            break
         else:
             return None
     if len(clues) != count:
@@ -221,27 +243,30 @@ def _clues_all_needed(defined, clues):
 
 
 def _generate_logic(block, level):
-    """A solvable 3x3 with `level+1` clues of the block's rule type and a
-    fixed given-cell count, so the player must deduce `level+1` cells."""
+    """A solvable 3x3 with `level+1` clues of the block's rule type laid out
+    over `level+1` two-open-cell puzzle rows — so the level costs exactly
+    `level+1` clicks and every shown clue points at a cell still to solve."""
     want_clues = _CLUE_COUNT[level]
-    want_given = _GIVEN_COUNT[level]
-    all_cells = [(y, x) for y in range(SIZE) for x in range(SIZE)]
+    want_rows = level + 1
     fallback = None
     # spend up to STRICT tries chasing a puzzle where every clue is essential;
     # past that, fall back to the first solvable, clue-dependent puzzle found.
-    strict = 700
-    for attempt in range(2500):
+    strict = 800
+    for attempt in range(3200):
         if attempt >= strict and fallback is not None:
             break
         solution = _random_solution()
-        clues = _make_clues(solution, block, want_clues)
-        if clues is None:
-            continue
-        given = random.sample(all_cells, want_given)
+        open_cells = _open_cells_in_rows(want_rows)
+        given = [(y, x) for y in range(SIZE) for x in range(SIZE)
+                 if (y, x) not in open_cells]
         defined = _define_rules(solution, given)
-        # the clues must matter and the puzzle must fully solve
+        # the board must not solve itself before a single clue is read
         if _solver_wins(defined):
             continue
+        clues = _make_clues(solution, block, want_clues, open_cells)
+        if clues is None:
+            continue
+        # the clues must matter and the puzzle must fully solve
         if not _solver_wins(defined + clues):
             continue
         if _clues_all_needed(defined, clues):
@@ -393,15 +418,23 @@ class TutorialDirector(object):
     # ------------------------------------------------------------------
     def tracker(self):
         """The 6-block progress rows for the side panel and win plaque:
-        a list of (name, cleared_levels, done, is_current)."""
+        a list of (name, cleared_levels, done, is_current).
+
+        A fully-cleared block reads as `done` (struck through, 3/3) — unless
+        it is the block being played right now, first run or replay alike,
+        which instead shows live progress and the current-row highlight. Once
+        the whole tutorial is finished there is no current block, so every
+        row settles to a struck-through 3/3."""
+        playing = not (self.all_done and not self.replay)
         rows = []
         for i in range(BLOCK_COUNT):
-            if i < self.block:
-                cleared = LEVELS_PER_BLOCK
-            elif i == self.block:
-                cleared = min(LEVELS_PER_BLOCK, self.level)
+            is_current = (i == self.block) and playing
+            cleared_block = i < self.blocks_done or i < self.block
+            if is_current:
+                cleared, done = min(LEVELS_PER_BLOCK, self.level), False
+            elif cleared_block:
+                cleared, done = LEVELS_PER_BLOCK, True
             else:
-                cleared = 0
-            done = i < self.blocks_done
-            rows.append((BLOCK_NAMES[i], cleared, done, i == self.block))
+                cleared, done = 0, False
+            rows.append((BLOCK_NAMES[i], cleared, done, is_current))
         return rows

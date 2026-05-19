@@ -23,6 +23,11 @@ LOSE = 'lose'
 
 DEFAULT_LIVES = 3
 
+# Seconds the board ignores further taps after a wrong click — long enough to
+# stop a frustrated player machine-gunning mistakes (and machine-gunning the
+# 'wrong' sound with them), short enough not to feel like a lockout.
+WRONG_COOLDOWN = 0.35
+
 _DIFF_KEY = {0: 'easy', 1: 'normal', 2: 'hard'}
 
 # Pre-defined start-cell count per (board size, difficulty index). Easy hands
@@ -77,6 +82,7 @@ class Game(object):
         self._lives = self._max_lives
         self._mistakes = 0
         self._hints = 0
+        self._wrong_cooldown = 0.0
 
         self._pending_restart = False
         self._pending = None         # a deferred action run on the next frame
@@ -153,6 +159,7 @@ class Game(object):
         """Point the freshly-built view's callbacks back at the presenter."""
         v = self._view
         v.on_field_click = self._on_field_click
+        v.on_field_define = self._on_field_define
         v.on_rule_click = self._on_rule_click
         v.on_continue = self._on_continue
         v.on_restart = self._on_restart
@@ -228,6 +235,9 @@ class Game(object):
             action = self._pending
             self._pending = None
             action()
+        if self._wrong_cooldown > 0.0:
+            self._wrong_cooldown = max(0.0, self._wrong_cooldown
+                                       - dt / 1000.0)
         if (self._state == PLAYING and self._mode == 'normal'
                 and self._timer is not None):
             self._timer.tick(dt)
@@ -265,10 +275,15 @@ class Game(object):
                 return
             self._open_menu()
         elif self._state == MENU:
+            # a menu opened over a finished round has no live board to
+            # return to — Esc must not drop the player onto a dead board
+            if self._view is not None and self._view.menu_finished:
+                return
             self._view.close_overlay()
             self._state = PLAYING
 
     def _open_menu(self):
+        was_finished = self._state in (WIN, LOSE)
         self._state = MENU
         if self._mode == 'tutorial':
             self._view.open_tutorial_menu(self._tutorial.tracker(), {
@@ -280,7 +295,7 @@ class Game(object):
         else:
             if self._stats is not None and self._view is not None:
                 self._view.set_stats(self._stats.summary())
-            self._view.open_menu()
+            self._view.open_menu(finished=was_finished)
 
     def _debug_add_life(self):
         self._max_lives += 1
@@ -291,7 +306,7 @@ class Game(object):
     # --------------------------- callbacks ----------------------------
 
     def _on_field_click(self, btn):
-        if self._state != PLAYING:
+        if self._state != PLAYING or self._wrong_cooldown > 0.0:
             return
         if self._mode == 'tutorial':
             self._tutorial_field_click(btn)
@@ -299,20 +314,43 @@ class Game(object):
         # If the model says this number IS the answer for the cell, the
         # player wrongly removed the correct candidate.
         if self._model[btn.y][btn.x] == btn.n:
-            self._lives -= 1
-            self._mistakes += 1
-            self._view.wrong_feedback(btn)
-            self._view.damage_life()
-            self._play('wrong')
-            if self._lives <= 0:
-                self._finish_round(won=False)
-            else:
-                self._view.set_massage('wrong', self._lives)
+            self._register_wrong(btn)
         else:
             self._view.set_massage('good')
             self._view.remove_button(btn)
             if self._view.defined_cells_count == self._active_size ** 2:
                 self._finish_round(won=True)
+
+    def _register_wrong(self, btn):
+        """Shared wrong-click outcome: lose a life, react, start a cooldown."""
+        self._lives -= 1
+        self._mistakes += 1
+        self._view.wrong_feedback(btn)
+        self._view.damage_life()
+        self._play('wrong')
+        self._wrong_cooldown = WRONG_COOLDOWN
+        if self._lives <= 0:
+            self._finish_round(won=False)
+        else:
+            self._view.set_massage('wrong', self._lives)
+
+    def _on_field_define(self, btn):
+        """A long-press 'define': the player asserts this candidate is the
+        cell's answer, so every other candidate in the cell is cleared."""
+        if self._state != PLAYING or self._wrong_cooldown > 0.0:
+            return
+        if self._mode == 'tutorial':
+            self._tutorial_field_define(btn)
+            return
+        if self._model[btn.y][btn.x] == btn.n:
+            self._view.set_massage('good')
+            self._view.define_cell(btn)
+            if self._view.defined_cells_count == self._active_size ** 2:
+                self._finish_round(won=True)
+        else:
+            # asserting the wrong candidate would wipe the real answer — it
+            # counts exactly as wrong as popping the correct candidate
+            self._register_wrong(btn)
 
     def _on_rule_click(self, btn):
         if self._state == PLAYING:
@@ -407,19 +445,30 @@ class Game(object):
         """A board click during the onboarding — never costs a life, but in
         a logic block a wrong removal resets the block."""
         level = self._level
-        if not level.free:
-            if level.solution[btn.y][btn.x] == btn.n:
-                # the player tried to remove the correct candidate
-                self._view.wrong_feedback(btn)
-                self._play('wrong')
-                text = self._tutorial.record_mistake()
-                if text is not None:
-                    self._view.show_popup(text, button_label='Got it',
-                                          tag='TIP')
-                return
+        if not level.free and level.solution[btn.y][btn.x] == btn.n:
+            self._tutorial_mistake(btn)       # removed the correct candidate
+            return
         self._view.remove_button(btn)
         if self._view.defined_cells_count == self._active_size ** 2:
             self._finish_tutorial_level()
+
+    def _tutorial_field_define(self, btn):
+        """A long-press 'define' during the onboarding."""
+        level = self._level
+        if not level.free and level.solution[btn.y][btn.x] != btn.n:
+            self._tutorial_mistake(btn)       # asserted the wrong candidate
+            return
+        self._view.define_cell(btn)
+        if self._view.defined_cells_count == self._active_size ** 2:
+            self._finish_tutorial_level()
+
+    def _tutorial_mistake(self, btn):
+        self._view.wrong_feedback(btn)
+        self._play('wrong')
+        self._wrong_cooldown = WRONG_COOLDOWN
+        text = self._tutorial.record_mistake()
+        if text is not None:
+            self._view.show_popup(text, button_label='Got it', tag='TIP')
 
     def _finish_tutorial_level(self):
         self._view.disable_buttons()

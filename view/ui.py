@@ -28,6 +28,18 @@ def _fmt_time(seconds):
     return '%02d:%02d' % (seconds // 60, seconds % 60)
 
 
+# Optional UI click-sound hook. The window registers a callback here once, so
+# every overlay widget — buttons, the segmented controls, toggles, the volume
+# slider — answers a press with the 'click' sound, without each overlay
+# needing to carry a reference to the sound manager.
+_CLICK_SFX = None
+
+
+def set_click_sfx(callback):
+    global _CLICK_SFX
+    _CLICK_SFX = callback
+
+
 _PANEL_SHADOW_CACHE = {}
 
 
@@ -643,8 +655,16 @@ class _Overlay(object):
         if hasattr(event, 'pos'):
             ev = pygame.event.Event(event.type,
                                     {**event.dict, 'pos': self._to_local(event.pos)})
+        handled = False
         for wdg in widgets:
-            wdg.handle_event(ev)
+            if wdg.handle_event(ev):
+                handled = True
+        # one click tick per actual press — widgets activate on either the
+        # down or the up edge, so a slider drag's MOUSEMOTION is excluded
+        if (handled and _CLICK_SFX is not None
+                and event.type in (pygame.MOUSEBUTTONDOWN,
+                                    pygame.MOUSEBUTTONUP)):
+            _CLICK_SFX()
 
 
 class MenuOverlay(_Overlay):
@@ -654,26 +674,39 @@ class MenuOverlay(_Overlay):
     PANEL_W = 436
 
     def __init__(self, screen_size, palette, fonts, difficulty, size, volume,
-                 callbacks, stats=None, tooltips=True, touch=False):
+                 callbacks, stats=None, tooltips=True, touch=False,
+                 finished=False):
         super().__init__(screen_size, palette)
         self._stats = stats
         self.fonts = fonts
         self._cb = callbacks
+        self.finished = finished
         pad = 30
         x = pad
         inner_w = self.PANEL_W - pad * 2
 
         y = 104
-        self.btn_continue = TextButton(
-            (x, y, inner_w, 50), 'Continue', fonts['btn'],
-            self.accent, (28, 26, 30), on_click=callbacks.get('continue'),
-            radius=14)
-        y += 50 + 9
-        self.btn_restart = TextButton(
-            (x, y, inner_w, 42), 'Restart', fonts['btn'],
-            self.btn_base, self.text_color, on_click=callbacks.get('restart'),
-            radius=12)
-        y += 42 + 15
+        if finished:
+            # the round is already won or lost — there is nothing to resume,
+            # so no "Continue"; a single prominent button just deals a fresh
+            # board, and "Play" reads less confusingly than "Restart" here.
+            self.btn_continue = None
+            self.btn_restart = TextButton(
+                (x, y, inner_w, 56), 'Play', fonts['btn'],
+                self.accent, (28, 26, 30),
+                on_click=callbacks.get('restart'), radius=14)
+            y += 116
+        else:
+            self.btn_continue = TextButton(
+                (x, y, inner_w, 50), 'Continue', fonts['btn'],
+                self.accent, (28, 26, 30),
+                on_click=callbacks.get('continue'), radius=14)
+            y += 50 + 9
+            self.btn_restart = TextButton(
+                (x, y, inner_w, 42), 'Restart', fonts['btn'],
+                self.btn_base, self.text_color,
+                on_click=callbacks.get('restart'), radius=12)
+            y += 42 + 15
 
         self._diff_label_y = y
         y += 20
@@ -725,9 +758,10 @@ class MenuOverlay(_Overlay):
         self.PANEL_H = y + 22 + 3 * 21 + 24 + 22
         self.panel = pygame.Rect(0, 0, self.PANEL_W, self.PANEL_H)
 
-        self.widgets = [self.btn_continue, self.btn_restart, self.seg_diff,
-                        self.seg_size, self.slider, self.btn_howto,
-                        self.btn_theme, self.toggle_tips, self.toggle_touch]
+        self.widgets = [w for w in (
+            self.btn_continue, self.btn_restart, self.seg_diff,
+            self.seg_size, self.slider, self.btn_howto, self.btn_theme,
+            self.toggle_tips, self.toggle_touch) if w is not None]
         self._panel_bg = self._build_bg()
 
     def _build_bg(self):

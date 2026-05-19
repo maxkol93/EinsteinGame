@@ -135,25 +135,48 @@ class Ring:
 
 
 class Ghost:
-    """Visual snapshot of a small tile playing its pop-out animation."""
+    """Visual snapshot of a small tile playing its pop-out animation.
+
+    A ``delay`` holds the tile on screen, drawn statically, until its turn in
+    a staggered cascade arrives — only then does it play the pop-out."""
     POP_DURATION = 0.19
 
-    def __init__(self, rect, color, text, font, descent_shift=0):
+    def __init__(self, rect, color, text, font, descent_shift=0, delay=0.0):
         self.rect = pygame.Rect(rect)
         self.color = (color or (90, 90, 90))[:3]
         self.text = text
         self.font = font
         self.descent_shift = descent_shift
+        self.delay = max(0.0, delay)
         self.life = self.POP_DURATION
         self.max_life = self.POP_DURATION
 
     def update(self, dt):
+        if self.delay > 0.0:
+            self.delay -= dt
+            return
         self.life -= dt
 
     def alive(self):
-        return self.life > 0
+        return self.delay > 0.0 or self.life > 0
+
+    def _draw_static(self, surface):
+        """The candidate tile, held un-popped until its cascade beat."""
+        w, h = self.rect.size
+        spr = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(spr, (*self.color, 255), (0, 0, w, h),
+                         border_radius=max(2, w // 5))
+        if self.text and self.font is not None:
+            timg = self.font.render(self.text, True, (255, 255, 255))
+            tw, th = timg.get_size()
+            spr.blit(timg, ((w - tw) // 2,
+                            (h - th) // 2 + self.descent_shift))
+        surface.blit(spr, self.rect.topleft)
 
     def draw(self, surface):
+        if self.delay > 0.0:
+            self._draw_static(surface)
+            return
         t = 1.0 - max(0.0, self.life / self.max_life)
         # punch up then collapse: a quick squash-and-pop
         if t < 0.3:
@@ -228,6 +251,9 @@ class Effects:
         # big-cell pops waiting on a stagger delay, so a chain of cells
         # resolved at once appears as a cascade rather than all together
         self._pending_pops = []
+        # small-tile burst/ring effects parked the same way — the ghost
+        # itself self-delays (drawn static meanwhile), these join it on cue
+        self._pending_small = []
         self.bounds = bounds
         self.theme_colors = [(231, 111, 81), (244, 162, 97), (233, 196, 106),
                              (138, 177, 167), (98, 122, 167), (114, 80, 124)]
@@ -256,6 +282,7 @@ class Effects:
         self.rings.clear()
         self.flashes.clear()
         self._pending_pops.clear()
+        self._pending_small.clear()
         self._shake_remaining = 0.0
         self._shake_amp = 0.0
         self._vig_hold = self._vig_hold_target = 0.0
@@ -302,8 +329,17 @@ class Effects:
                                            size=psize, gravity=gravity,
                                            shape=shape))
 
-    def small_pop(self, ghost, color):
+    def small_pop(self, ghost, color, delay=0.0):
+        # the ghost is added now and self-delays its own animation; the
+        # burst + ring are parked so they fire the instant it pops
         self.ghosts.append(ghost)
+        if delay > 0.0:
+            self._pending_small.append({'t': delay, 'ghost': ghost,
+                                        'color': color})
+        else:
+            self._small_burst(ghost, color)
+
+    def _small_burst(self, ghost, color):
         cx, cy = ghost.rect.center
         self.burst(cx, cy, color, count=7, speed=210,
                    life_range=(0.22, 0.42), size=3, spark_ratio=0.55)
@@ -420,6 +456,15 @@ class Effects:
                                   if pp['t'] > 0.0]
             for pp in due:
                 self.big_pop(pp['button'], pp['color'], pp['snap'])
+        # release any small-tile bursts whose ghost has finished waiting
+        if self._pending_small:
+            for pp in self._pending_small:
+                pp['t'] -= dt
+            due = [pp for pp in self._pending_small if pp['t'] <= 0.0]
+            self._pending_small = [pp for pp in self._pending_small
+                                   if pp['t'] > 0.0]
+            for pp in due:
+                self._small_burst(pp['ghost'], pp['color'])
         for p in self.particles:
             p.update(dt)
         self.particles = [p for p in self.particles
@@ -508,4 +553,5 @@ class Effects:
     @property
     def busy(self):
         return bool(self.particles or self.rings or self.big_spawns
-                    or self.ghosts or self._pending_pops)
+                    or self.ghosts or self._pending_pops
+                    or self._pending_small)

@@ -14,7 +14,7 @@ from view.anim import clamp01, ease_out_back, ease_out_cubic, lerp
 from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
                      draw_text, draw_tutorial_progress, TutorialPopup,
                      TutorialResultOverlay, TutorialMenuOverlay,
-                     BlockSelectOverlay)
+                     BlockSelectOverlay, set_click_sfx)
 from view.decoder import rule_segments, symbol_for
 from model.tutorial import BLOCK_NAMES
 import view.buttons as buttons_mod
@@ -170,6 +170,9 @@ class GameWindow(object):
         self._scene = pygame.Surface((CANVAS_WIDTH, CANVAS_HEIGHT))
         self._cascade_time = 0.0
         self._cascade_duration = 0.0
+        self._cascade_t = 0.0          # running delay as a click's cascade resolves
+        self._scheduled_sfx = []       # (due_clock, key) — staggered cascade sounds
+        self._slowmo_t = 0.0           # remaining slow-mo time, seconds
         self._mouse_pos = (-1, -1)
         self._suppress_effects = False
         self._clock = 0.0
@@ -199,8 +202,10 @@ class GameWindow(object):
         self._tooltips_enabled = True
         self._touch_mode = False
         self._armed = None       # touch: a tapped-once widget awaiting confirm
+        self._press = None       # a held field tile: {'btn': ..., 't': secs}
 
         self._overlay = None       # MenuOverlay / ResultOverlay
+        self._menu_finished = False  # menu opened over a won/lost board
         self._confetti_timer = 0.0
         self._stats_summary = None
 
@@ -214,6 +219,7 @@ class GameWindow(object):
 
         # Handler hooks (presenter registers these)
         self.on_field_click = None
+        self.on_field_define = None
         self.on_rule_click = None
         self.on_continue = None
         self.on_restart = None
@@ -232,6 +238,9 @@ class GameWindow(object):
         self._build_sidebar()
         self._sidebar_strip = self._make_shadow_strip(dark_on_right=False)
         self._rules_strip = self._make_shadow_strip(dark_on_right=True)
+
+        # let every overlay widget answer a press with the UI click sound
+        set_click_sfx(lambda: self._play('click'))
 
     # --------------------------- loading -----------------------------
 
@@ -386,6 +395,7 @@ class GameWindow(object):
 
     def disable_buttons(self):
         self._armed = None
+        self._press = None
         for row in self._cells:
             for cell in row:
                 if isinstance(cell, list):
@@ -450,9 +460,10 @@ class GameWindow(object):
 
     # --------------------------- overlays ----------------------------
 
-    def open_menu(self):
+    def open_menu(self, finished=False):
         self._effects.calm()
         self._armed = None
+        self._menu_finished = finished
         vol = self._sounds.volume if self._sounds else 0.7
         callbacks = {
             'continue': self._menu_continue,
@@ -470,7 +481,7 @@ class GameWindow(object):
                                     self._difficulty, self._sel_size, vol,
                                     callbacks, stats=self._stats_summary,
                                     tooltips=self._tooltips_enabled,
-                                    touch=self._touch_mode)
+                                    touch=self._touch_mode, finished=finished)
 
     def open_tutorial(self):
         """Menu 'Tutorial' button (post-onboarding): pick a block to replay."""
@@ -567,78 +578,101 @@ class GameWindow(object):
             self.on_hint()
 
     def _menu_continue(self):
-        self._play('click')
+        # the 'click' is played by the overlay's widget routing
         self.close_overlay()
         if self.on_continue:
             self.on_continue()
 
+    @property
+    def menu_finished(self):
+        """True while the menu is the one opened over a won/lost board."""
+        return self._menu_finished
+
     def _menu_theme(self):
-        self._play('click')
         self._cycle_palette()
         if self.on_theme:
             self.on_theme(self._palette_name)
         if isinstance(self._overlay, MenuOverlay):
-            self.open_menu()  # rebuild with the new palette
+            self.open_menu(self._menu_finished)  # rebuild with the new palette
 
     # --------------------------- cell logic --------------------------
 
+    BIG_CASCADE_STEP = 0.12   # gap between consecutive cells popping in
+
     def remove_button(self, btn):
+        """Pop one candidate. Whatever that resolves — the cell itself, then
+        the rest of its row — pops in as a staggered cascade."""
         self._hint_btn = None      # any board change retires a stale hint
-        cur_n = btn.n
-        cur_y = btn.y
-        cur_x = btn.x
+        self._cascade_t = 0.0
+        cur_n, cur_y, cur_x = btn.n, btn.y, btn.x
         cell = self._cells[cur_y][cur_x]
-        if isinstance(cell, list) and btn in cell:
-            cell.remove(btn)
-            self._spawn_small_pop(btn)
-        if isinstance(cell, list) and len(cell) == 1:
-            last = cell.pop()
-            self._cells[cur_y][cur_x] = None
-            self._create_big_button(cur_y, cur_x, last.n)
-            self._remove_all_in_row(cur_y, last.n)
+        if not (isinstance(cell, list) and btn in cell):
+            return
+        cell.remove(btn)
+        self._spawn_small_pop(btn, 0.0)
+        if len(cell) == 1:
+            self._cascade_resolve(cur_y, cur_x, list(cell), cell[0].n)
         self._check_last_in_row(cur_y, cur_n)
-        # one click can resolve several cells at once — pop them in as a
-        # cascade rather than all in the same frame
         self._flush_big_batch()
 
-    def _remove_all_in_row(self, row, number):
+    def define_cell(self, keep_btn):
+        """Long-press 'define': keep this candidate, clear the rest of its
+        cell at once, then let the row cascade as usual."""
+        y, x = keep_btn.y, keep_btn.x
+        cell = self._cells[y][x]
+        if not isinstance(cell, list) or keep_btn not in cell:
+            return
+        self._hint_btn = None
+        self._cascade_t = 0.0
+        # _cascade_resolve pops every candidate, blooms the big cell, clears
+        # the row and re-checks each cleared value — the whole job
+        self._cascade_resolve(y, x, list(cell), keep_btn.n)
+        self._flush_big_batch()
+
+    def _cascade_resolve(self, row, x, buttons, n):
+        """Cell (row, x) flips to the solved big cell `n` as the next cascade
+        step: every candidate still in it pops and the big cell blooms on the
+        same staggered beat, then the value clears down the rest of the row."""
+        step = self._cascade_t
+        self._cascade_t += self.BIG_CASCADE_STEP
+        self._cells[row][x] = None
+        for b in buttons:
+            self._spawn_small_pop(b, step)
+        self._create_big_button(row, x, n, step)
+        self._remove_all_in_row(row, n, step)
+        # a candidate value cleared from this cell may now be unique elsewhere
+        for b in buttons:
+            if b.n != n:
+                self._check_last_in_row(row, b.n)
+
+    def _remove_all_in_row(self, row, number, delay):
         for x, cell in enumerate(self._cells[row]):
             if not isinstance(cell, list):
                 continue
-            for b in list(cell):
-                if b.n == number:
-                    cell.remove(b)
-                    self._spawn_small_pop(b)
-                    if len(cell) == 1:
-                        other = cell.pop()
-                        self._cells[row][x] = None
-                        self._create_big_button(row, x, other.n)
-                        self._remove_all_in_row(row, other.n)
+            match = next((b for b in cell if b.n == number), None)
+            if match is None:
+                continue
+            if len(cell) == 2:
+                # losing `number` solves this cell — flip the whole cell as
+                # one cascade step (every candidate pops on its own beat)
+                survivor = next(b for b in cell if b is not match)
+                self._cascade_resolve(row, x, list(cell), survivor.n)
+            else:
+                cell.remove(match)
+                self._spawn_small_pop(match, delay)
 
     def _check_last_in_row(self, row, number):
-        count = 0
-        column = -1
-        check_cell = None
+        count, column, found = 0, -1, None
         for x, cell in enumerate(self._cells[row]):
             if not isinstance(cell, list):
                 continue
-            for b in cell:
-                if b.n == number:
-                    count += 1
-                    column = x
-                    check_cell = cell
+            if any(b.n == number for b in cell):
+                count += 1
+                column, found = x, cell
         if count == 1:
-            self._create_big_button(row, column, number)
-            self._remove_all_button_in_cell(check_cell, row, column)
+            self._cascade_resolve(row, column, list(found), number)
 
-    def _remove_all_button_in_cell(self, cell, row, column):
-        for_check = list(cell)
-        for b in for_check:
-            self._spawn_small_pop(b)
-        for b in for_check:
-            self._check_last_in_row(row, b.n)
-
-    def _create_big_button(self, y, x, n):
+    def _create_big_button(self, y, x, n, delay=0.0):
         from view.decoder import decode_symbol
         self._defined_cells_count += 1
         bg = self._big_bg[n // 10]
@@ -656,26 +690,26 @@ class GameWindow(object):
         self._big_cells[(y, x)] = btn
         self._cells[y][x] = None
         if not getattr(self, '_suppress_effects', False):
-            # deferred: remove_button flushes the whole batch as a cascade
-            self._batch_big.append(btn)
-
-    BIG_CASCADE_STEP = 0.11   # gap between consecutive big-cell pops
+            # deferred: the batch is flushed as a staggered cascade
+            self._batch_big.append((btn, delay))
 
     def _flush_big_batch(self):
-        """Fire the pop for every big cell created during this click, each
-        offset a little later than the last so they cascade in."""
+        """Fire the pop for every big cell resolved by this action, each on
+        the cascade beat it was tagged with."""
         batch = self._batch_big
         self._batch_big = []
         if not batch:
             return
-        step = self.BIG_CASCADE_STEP if len(batch) > 1 else 0.0
-        for i, btn in enumerate(batch):
+        for btn, delay in batch:
             snap = self._snapshot_button(btn)
             burst_color = color_for_value(btn.n) or (220, 220, 220)
-            self._effects.big_pop(btn, burst_color, snap, delay=i * step)
-        # one solve sound per click: overlapping copies of the long solve
-        # sample would just stack into mush (and clip the mix)
+            self._effects.big_pop(btn, burst_color, snap, delay=delay)
+        # one resolving chime per action; the staggered 'pick' ticks the
+        # small pops schedule are what make the cascade audible as a run
         self._play('solve')
+        # a chunky cascade earns a brief slow-mo as it kicks off
+        if len(batch) >= 3:
+            self._slowmo_t = self.SLOWMO_DUR
 
     def _snapshot_button(self, button):
         snap = pygame.Surface(button.rect.size, pygame.SRCALPHA)
@@ -692,14 +726,23 @@ class GameWindow(object):
         rect = pygame.Rect(ox, oy, self._cell_side, self._cell_side)
         self._effects.wrong_click(rect)
 
-    def _spawn_small_pop(self, btn):
+    def _spawn_small_pop(self, btn, delay=0.0):
         if getattr(self, '_suppress_effects', False):
             return
         color = btn.bg_color or (90, 90, 90)
         descent_shift = self._font_field.get_descent() // 2 if btn.font else 0
-        ghost = Ghost(btn.rect, color, btn.text, btn.font, descent_shift)
-        self._effects.small_pop(ghost, color)
-        self._play('pick')
+        ghost = Ghost(btn.rect, color, btn.text, btn.font, descent_shift,
+                      delay=delay)
+        self._effects.small_pop(ghost, color, delay=delay)
+        self._play_at(delay, 'pick')
+
+    def _play_at(self, delay, key):
+        """Play a sound now, or schedule it `delay` seconds ahead — so a
+        staggered cascade is heard as a run, not one bunched-up trigger."""
+        if delay <= 0.0:
+            self._play(key)
+        else:
+            self._scheduled_sfx.append((self._clock + delay, key))
 
     # --------------------------- cascade entrance --------------------
 
@@ -865,10 +908,39 @@ class GameWindow(object):
                     if isinstance(cell, list):
                         for btn in cell:
                             if btn.hit_test(pos):
-                                self._activate_field(btn)
+                                # arm a press: a quick release pops the
+                                # candidate, a held one 'defines' the cell
+                                self._press = {'btn': btn, 't': 0.0}
                                 return
             # a tap on bare board clears any pending touch selection
             self._armed = None
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._end_press(event.pos)
+
+    def _end_press(self, pos):
+        """Mouse released over a field tile before the long-press filled —
+        treat it as an ordinary quick pop."""
+        press = self._press
+        self._press = None
+        if press is not None and press['btn'].hit_test(pos):
+            self._activate_field(press['btn'])
+
+    def _update_press(self, dt):
+        """Grow the held-press fill; cancel it if the cursor leaves the tile;
+        fire the 'define' once it is full."""
+        if self._press is None:
+            return
+        btn = self._press['btn']
+        if (self._overlay is not None
+                or not btn.hit_test(self._mouse_pos)
+                or not pygame.mouse.get_pressed()[0]):
+            self._press = None       # moved off, released or interrupted
+            return
+        self._press['t'] += dt
+        if self._press['t'] >= self.LONGPRESS_DUR:
+            self._press = None
+            if self.on_field_define:
+                self.on_field_define(btn)
 
     def _note_touch(self):
         """First finger event seen — switch to touch mode and let the
@@ -901,11 +973,33 @@ class GameWindow(object):
 
     # --------------------------- update ------------------------------
 
+    SLOWMO_DUR = 0.5      # wall-clock length of the cascade slow-mo
+    SLOWMO_MIN = 0.34     # slowest time scale, reached right as it kicks off
+    LONGPRESS_DUR = 0.46  # hold time before a press becomes a 'define'
+
+    def _time_scale(self, real_dt):
+        """Advance and sample the cascade slow-mo: time crawls the instant a
+        big cascade starts, then eases smoothly back to full speed."""
+        if self._slowmo_t <= 0.0:
+            return 1.0
+        self._slowmo_t = max(0.0, self._slowmo_t - real_dt)
+        frac = self._slowmo_t / self.SLOWMO_DUR          # 1 -> 0
+        return self.SLOWMO_MIN + (1.0 - self.SLOWMO_MIN) * (1.0 - frac) ** 0.55
+
     def tick(self, dt_ms):
-        dt = dt_ms / 1000.0
+        real_dt = dt_ms / 1000.0
+        scale = self._time_scale(real_dt)
+        dt = real_dt * scale
         self._clock += dt
         if self._sounds is not None:
-            self._sounds.tick(dt_ms)
+            self._sounds.tick(dt_ms * scale)
+        # release cascade sounds whose staggered moment has now arrived
+        if self._scheduled_sfx:
+            ready = [k for (t, k) in self._scheduled_sfx if t <= self._clock]
+            self._scheduled_sfx = [(t, k) for (t, k) in self._scheduled_sfx
+                                   if t > self._clock]
+            for k in ready:
+                self._play(k)
         self._effects.update(dt)
         self._cascade_time += dt
         self._msg_anim = min(1.0, self._msg_anim + dt * 6.0)
@@ -914,6 +1008,9 @@ class GameWindow(object):
             self._mouse_pos = pygame.mouse.get_pos()
         except pygame.error:
             self._mouse_pos = (-1, -1)
+
+        # the long-press fill tracks real time, not the slow-mo'd clock
+        self._update_press(dt_ms / 1000.0)
 
         self._menu_button.update(dt, self._mouse_pos)
         self._hint_button.update(dt, self._mouse_pos)
@@ -1126,6 +1223,7 @@ class GameWindow(object):
         self._draw_tooltip(s)
         self._draw_hint(s)
         self._draw_armed(s)
+        self._draw_press_fill(s)
         self._effects.draw_vignette(s)
 
         dx, dy = self._effects.shake_offset()
@@ -1326,7 +1424,10 @@ class GameWindow(object):
         tile = self.TOOLTIP_TILE
         space = font.size(' ')[0]
         line_h = max(font.get_height(), tile) + 4
-        max_w = 250
+        # wide enough that the one-text-segment rules ("same column",
+        # "left of") keep their closing cell tile on the first line instead
+        # of orphaning it onto a second row
+        max_w = 300
 
         # flow words and cell tiles into wrapped lines
         tokens = []
@@ -1367,6 +1468,8 @@ class GameWindow(object):
                     img = font.render(val, True, self._palette['text'])
                     pill.blit(img, (x, cy - img.get_height() // 2))
                 x += w + space
+        # semi-transparent so the cells it highlights stay readable beneath it
+        pill.set_alpha(224)
         grect = group[0].rect.union(group[-1].rect)
         tx = max(8, grect.left - 14 - pw)
         ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
@@ -1410,6 +1513,32 @@ class GameWindow(object):
         px = max(4, min(CANVAS_WIDTH - pw - 4, r.centerx - pw // 2))
         py = max(4, r.top - ph - 10)
         surface.blit(pill, (px, py))
+
+    def _draw_press_fill(self, surface):
+        """A radial fill ring growing around a tile held for a long-press;
+        completing the ring 'defines' the cell."""
+        if self._press is None:
+            return
+        p = clamp01(self._press['t'] / self.LONGPRESS_DUR)
+        if p <= 0.01:
+            return
+        r = self._press['btn'].rect
+        accent = self._palette['accent']
+        pad = 6
+        width = 4
+        d = max(r.w, r.h) + pad * 2
+        surf = pygame.Surface((d, d), pygame.SRCALPHA)
+        cx = cy = d // 2
+        rad = d // 2 - width
+        # faint full track, then the bright sweeping arc drawn on top
+        pygame.draw.circle(surf, (*accent, 55), (cx, cy), rad, width)
+        steps = max(2, int(p * 72))
+        for i in range(steps + 1):
+            a = -math.pi / 2 + 2.0 * math.pi * p * (i / steps)
+            x = cx + rad * math.cos(a)
+            y = cy + rad * math.sin(a)
+            pygame.draw.circle(surf, (*accent, 240), (int(x), int(y)), width)
+        surface.blit(surf, (r.centerx - cx, r.centery - cy))
 
     def _draw_hearts(self, surface):
         react = self._hearts_react / 0.5
