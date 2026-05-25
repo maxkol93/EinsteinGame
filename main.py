@@ -1,5 +1,4 @@
 import asyncio
-import os
 
 import pygame
 
@@ -8,10 +7,12 @@ from view.window import CANVAS_WIDTH, CANVAS_HEIGHT
 
 
 async def main():
-    # A small mixer buffer keeps the UI SFX low-latency. Both calls are
-    # wrapped: a machine with no audio device must still run the game.
+    # A 1024-sample buffer is the sweet spot: still snappy for UI SFX, but
+    # large enough that the wasm/web audio thread does not underrun (a 512
+    # buffer crackles badly there). Both calls are wrapped: a machine with
+    # no audio device must still run the game.
     try:
-        pygame.mixer.pre_init(44100, -16, 2, 512)
+        pygame.mixer.pre_init(44100, -16, 2, 1024)
     except pygame.error:
         pass
     pygame.init()
@@ -22,10 +23,9 @@ async def main():
     pygame.display.set_caption('Einstein game')
     pygame.display.set_mode((CANVAS_WIDTH, CANVAS_HEIGHT))
 
-    palette = os.environ.get('PALETTE', 'mocha')
-    game = Game(palette_name=palette)
+    game = Game()
     try:
-        await game.run(complexity=20)
+        await game.run()
     finally:
         pygame.quit()
 

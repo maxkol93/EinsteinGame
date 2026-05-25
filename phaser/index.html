@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>Einstein</title>
+    <style>
+      /* DejaVu Sans matches the pygame build's glyph coverage (Roman numerals,
+         currency, Greek, maths) so symbols render identically. */
+      @font-face {
+        font-family: 'DejaVu Sans';
+        font-style: normal;
+        font-weight: 400;
+        src: url('./fonts/DejaVuSans.ttf') format('truetype');
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'DejaVu Sans';
+        font-style: normal;
+        font-weight: 700;
+        src: url('./fonts/DejaVuSans-Bold.ttf') format('truetype');
+        font-display: block;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #1c1819;
+        overflow: hidden;
+      }
+      #game {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

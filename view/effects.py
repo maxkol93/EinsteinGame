@@ -135,25 +135,48 @@ class Ring:
 
 
 class Ghost:
-    """Visual snapshot of a small tile playing its pop-out animation."""
+    """Visual snapshot of a small tile playing its pop-out animation.
+
+    A ``delay`` holds the tile on screen, drawn statically, until its turn in
+    a staggered cascade arrives — only then does it play the pop-out."""
     POP_DURATION = 0.19
 
-    def __init__(self, rect, color, text, font, descent_shift=0):
+    def __init__(self, rect, color, text, font, descent_shift=0, delay=0.0):
         self.rect = pygame.Rect(rect)
         self.color = (color or (90, 90, 90))[:3]
         self.text = text
         self.font = font
         self.descent_shift = descent_shift
+        self.delay = max(0.0, delay)
         self.life = self.POP_DURATION
         self.max_life = self.POP_DURATION
 
     def update(self, dt):
+        if self.delay > 0.0:
+            self.delay -= dt
+            return
         self.life -= dt
 
     def alive(self):
-        return self.life > 0
+        return self.delay > 0.0 or self.life > 0
+
+    def _draw_static(self, surface):
+        """The candidate tile, held un-popped until its cascade beat."""
+        w, h = self.rect.size
+        spr = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(spr, (*self.color, 255), (0, 0, w, h),
+                         border_radius=max(2, w // 5))
+        if self.text and self.font is not None:
+            timg = self.font.render(self.text, True, (255, 255, 255))
+            tw, th = timg.get_size()
+            spr.blit(timg, ((w - tw) // 2,
+                            (h - th) // 2 + self.descent_shift))
+        surface.blit(spr, self.rect.topleft)
 
     def draw(self, surface):
+        if self.delay > 0.0:
+            self._draw_static(surface)
+            return
         t = 1.0 - max(0.0, self.life / self.max_life)
         # punch up then collapse: a quick squash-and-pop
         if t < 0.3:
@@ -218,14 +241,64 @@ class BigSpawn:
                          special_flags=pygame.BLEND_RGBA_ADD)
 
 
+class FloatText:
+    """A pre-rendered label that rises, pops in and fades — the '+N chain!'
+    combo readout. The text surface is rendered by the caller (Effects has no
+    fonts), so this just animates it."""
+    DURATION = 1.05
+
+    def __init__(self, surface, x, y):
+        self.base = surface
+        self.x = x
+        self.y = y
+        self.life = self.DURATION
+        self.max_life = self.DURATION
+
+    def update(self, dt):
+        self.life -= dt
+
+    def alive(self):
+        return self.life > 0
+
+    def draw(self, surface):
+        t = 1.0 - max(0.0, self.life / self.max_life)     # 0 -> 1
+        rise = -52 * ease_out_cubic(t)
+        if t < 0.22:
+            scale = 0.5 + 0.62 * ease_out_back(t / 0.22, overshoot=2.4)
+        else:
+            scale = 1.0 + 0.04 * math.sin((t - 0.22) * 6.0)
+        alpha = 255 if t < 0.62 else int(255 * max(0.0, 1.0 - (t - 0.62) / 0.38))
+        if alpha <= 0:
+            return
+        img = self.base
+        w, h = img.get_size()
+        sw, sh = max(1, int(w * scale)), max(1, int(h * scale))
+        if (sw, sh) != (w, h):
+            img = pygame.transform.smoothscale(img, (sw, sh))
+        if alpha < 255:
+            img = img.copy()
+            img.set_alpha(alpha)
+        surface.blit(img, (int(self.x - sw / 2), int(self.y + rise - sh / 2)))
+
+
 class Effects:
     def __init__(self, bounds=(960, 728)):
         self.particles = []
         self.ghosts = []
         self.big_spawns = []
         self.rings = []
+        self.float_texts = []
         self.flashes = []
+        # big-cell pops waiting on a stagger delay, so a chain of cells
+        # resolved at once appears as a cascade rather than all together
+        self._pending_pops = []
+        # small-tile burst/ring effects parked the same way — the ghost
+        # itself self-delays (drawn static meanwhile), these join it on cue
+        self._pending_small = []
         self.bounds = bounds
+        # accessibility: when set, screenshake / particle bursts / confetti /
+        # vignette pulses are suppressed (the cell still pops, just calmly)
+        self._reduced = False
         self.theme_colors = [(231, 111, 81), (244, 162, 97), (233, 196, 106),
                              (138, 177, 167), (98, 122, 167), (114, 80, 124)]
         self._shake_remaining = 0.0
@@ -242,6 +315,9 @@ class Effects:
         self._vig_cache = {}
 
     # ------------------------------------------------------------------
+    def set_reduced(self, reduced):
+        self._reduced = bool(reduced)
+
     def set_theme_colors(self, colors):
         if colors:
             self.theme_colors = [c[:3] for c in colors]
@@ -251,7 +327,10 @@ class Effects:
         self.ghosts.clear()
         self.big_spawns.clear()
         self.rings.clear()
+        self.float_texts.clear()
         self.flashes.clear()
+        self._pending_pops.clear()
+        self._pending_small.clear()
         self._shake_remaining = 0.0
         self._shake_amp = 0.0
         self._vig_hold = self._vig_hold_target = 0.0
@@ -266,6 +345,8 @@ class Effects:
 
     # ------- camera shake -------
     def shake(self, amplitude, duration):
+        if self._reduced:
+            return
         if duration > self._shake_remaining or amplitude > self._shake_amp:
             self._shake_remaining = max(self._shake_remaining, duration)
             self._shake_total = max(self._shake_total, duration)
@@ -286,6 +367,8 @@ class Effects:
     # ------- spawning -------
     def burst(self, x, y, color, count=14, speed=320, life_range=(0.45, 0.85),
               size=5, spark_ratio=0.4, gravity=520, up_bias=(20, 90)):
+        if self._reduced:
+            return
         for i in range(count):
             ang = random.uniform(0, math.tau)
             sp = random.uniform(speed * 0.35, speed)
@@ -298,15 +381,30 @@ class Effects:
                                            size=psize, gravity=gravity,
                                            shape=shape))
 
-    def small_pop(self, ghost, color):
+    def small_pop(self, ghost, color, delay=0.0):
+        # the ghost is added now and self-delays its own animation; the
+        # burst + ring are parked so they fire the instant it pops
         self.ghosts.append(ghost)
+        if delay > 0.0:
+            self._pending_small.append({'t': delay, 'ghost': ghost,
+                                        'color': color})
+        else:
+            self._small_burst(ghost, color)
+
+    def _small_burst(self, ghost, color):
         cx, cy = ghost.rect.center
         self.burst(cx, cy, color, count=7, speed=210,
                    life_range=(0.22, 0.42), size=3, spark_ratio=0.55)
         self.rings.append(Ring(cx, cy, color, max_radius=26, life=0.28,
                                width=3))
 
-    def big_pop(self, button, color, snapshot):
+    def big_pop(self, button, color, snapshot, delay=0.0):
+        # a delayed pop is parked until its timer elapses — the cell stays
+        # hidden meanwhile (see consumed_big_spawn_button), then bursts in
+        if delay > 0.0:
+            self._pending_pops.append({'t': delay, 'button': button,
+                                       'color': color, 'snap': snapshot})
+            return
         self.big_spawns.append(BigSpawn(button, snapshot))
         cx, cy = button.rect.center
         self.burst(cx, cy, color, count=20, speed=430,
@@ -318,7 +416,16 @@ class Effects:
         self.flashes.append({'rect': pygame.Rect(button.rect),
                              'color': (255, 255, 255), 'life': 0.22,
                              'max': 0.22, 'radius': 12, 'add': True})
+        # a wide, slow, thin ring — the cascade "wave" that reads as one
+        # deduction rippling outward across the board (skipped in reduce-motion)
+        if not self._reduced:
+            self.rings.append(Ring(cx, cy, color, max_radius=150, life=0.6,
+                                   width=2, start_radius=24))
         self.shake(amplitude=7, duration=0.24)
+
+    def combo_text(self, surface, x, y):
+        """Float a pre-rendered '+N chain!' label up from (x, y)."""
+        self.float_texts.append(FloatText(surface, x, y))
 
     def wrong_click(self, rect):
         """Red flash, shake, downward red spray, edge vignette pulse."""
@@ -326,18 +433,19 @@ class Effects:
                              'color': (224, 64, 64), 'life': 0.38,
                              'max': 0.38, 'radius': 10, 'add': False})
         cx, cy = rect.centerx, rect.centery
-        for _ in range(12):
-            ang = random.uniform(math.pi * 0.12, math.pi * 0.88)
-            sp = random.uniform(150, 280)
-            self.particles.append(Particle(
-                cx, cy, math.cos(ang) * sp, math.sin(ang) * sp,
-                (232, 84, 84), random.uniform(0.35, 0.6), size=4,
-                shape='spark' if random.random() < 0.4 else 'chunk'))
-        self.rings.append(Ring(cx, cy, (232, 84, 84), max_radius=70,
-                               life=0.34, width=4))
+        if not self._reduced:
+            for _ in range(12):
+                ang = random.uniform(math.pi * 0.12, math.pi * 0.88)
+                sp = random.uniform(150, 280)
+                self.particles.append(Particle(
+                    cx, cy, math.cos(ang) * sp, math.sin(ang) * sp,
+                    (232, 84, 84), random.uniform(0.35, 0.6), size=4,
+                    shape='spark' if random.random() < 0.4 else 'chunk'))
+            self.rings.append(Ring(cx, cy, (232, 84, 84), max_radius=70,
+                                   life=0.34, width=4))
+            self._vig_color = (220, 55, 55)
+            self._vig_pulse = max(self._vig_pulse, 0.6)
         self.shake(amplitude=9, duration=0.32)
-        self._vig_color = (220, 55, 55)
-        self._vig_pulse = max(self._vig_pulse, 0.6)
 
     def heart_break(self, x, y):
         """Burst played when a life is lost."""
@@ -354,6 +462,8 @@ class Effects:
 
     def confetti(self, count=46):
         """A burst of falling paper — used by the win screen."""
+        if self._reduced:
+            return
         w, h = self.bounds
         for _ in range(count):
             x = random.uniform(0, w)
@@ -376,7 +486,9 @@ class Effects:
                                life=0.8, width=8))
         self.rings.append(Ring(cx, cy, (255, 255, 255), max_radius=300,
                                life=0.6, width=4))
-        for _ in range(26):
+        # particle counts kept modest so the wasm/web frame rate (and with
+        # it the audio thread) does not stall during the win flourish
+        for _ in range(16):
             ang = random.uniform(-math.pi, 0)
             sp = random.uniform(260, 560)
             self.particles.append(Particle(
@@ -385,7 +497,7 @@ class Effects:
                                (255, 255, 255)]),
                 random.uniform(0.7, 1.3), size=6, gravity=420,
                 shape='spark'))
-        self.confetti(60)
+        self.confetti(34)
 
     def defeat(self):
         """Lose flourish: a heavy thud, dark-red vignette settles in."""
@@ -399,6 +511,24 @@ class Effects:
         if self._shake_remaining > 0:
             self._shake_remaining = max(0.0, self._shake_remaining - dt)
             self._shake_phase += dt
+        # release any staggered big-cell pops whose delay has elapsed
+        if self._pending_pops:
+            for pp in self._pending_pops:
+                pp['t'] -= dt
+            due = [pp for pp in self._pending_pops if pp['t'] <= 0.0]
+            self._pending_pops = [pp for pp in self._pending_pops
+                                  if pp['t'] > 0.0]
+            for pp in due:
+                self.big_pop(pp['button'], pp['color'], pp['snap'])
+        # release any small-tile bursts whose ghost has finished waiting
+        if self._pending_small:
+            for pp in self._pending_small:
+                pp['t'] -= dt
+            due = [pp for pp in self._pending_small if pp['t'] <= 0.0]
+            self._pending_small = [pp for pp in self._pending_small
+                                   if pp['t'] > 0.0]
+            for pp in due:
+                self._small_burst(pp['ghost'], pp['color'])
         for p in self.particles:
             p.update(dt)
         self.particles = [p for p in self.particles
@@ -412,6 +542,9 @@ class Effects:
         for r in self.rings:
             r.update(dt)
         self.rings = [r for r in self.rings if r.alive()]
+        for ft in self.float_texts:
+            ft.update(dt)
+        self.float_texts = [ft for ft in self.float_texts if ft.alive()]
         for f in self.flashes:
             f['life'] -= dt
         self.flashes = [f for f in self.flashes if f['life'] > 0]
@@ -449,6 +582,8 @@ class Effects:
             r.draw(surface)
         for p in self.particles:
             p.draw(surface)
+        for ft in self.float_texts:
+            ft.draw(surface)
 
     def draw_vignette(self, surface):
         level = max(self._vig_hold, self._vig_pulse)
@@ -479,9 +614,13 @@ class Effects:
         return vig
 
     def consumed_big_spawn_button(self, button):
-        return any(s.button is button for s in self.big_spawns)
+        # True while a pop is playing *or* still parked — either way the
+        # static cell must stay hidden until the pop animation takes over
+        return (any(s.button is button for s in self.big_spawns)
+                or any(pp['button'] is button for pp in self._pending_pops))
 
     @property
     def busy(self):
         return bool(self.particles or self.rings or self.big_spawns
-                    or self.ghosts)
+                    or self.ghosts or self._pending_pops
+                    or self._pending_small or self.float_texts)

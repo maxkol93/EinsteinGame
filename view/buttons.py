@@ -1,7 +1,9 @@
+import math
+
 import pygame
 
 from view.decoder import decode_symbol
-from view.anim import approach, lerp_color
+from view.anim import approach, clamp01, lerp_color
 
 
 BG_COLOR = (40, 40, 40)
@@ -156,6 +158,9 @@ class GameButton(object):
     LIFT_SCALE = 0.09     # extra scale at full lift
     LIFT_RISE = 8         # pixels risen at full lift
 
+    HOP_DURATION = 0.36   # length of the one-shot "jump" of a highlighted cell
+    HOP_HEIGHT = 11       # peak rise of that jump, in pixels
+
     def __init__(self, rect=(0, 0, 50, 50), text='', font=None,
                  bg_image=None, bg_color=None, fg_color=WHITE,
                  text_align='center', border=True, radius=None):
@@ -180,6 +185,8 @@ class GameButton(object):
         self.glow_target = 0.0
         self.lift = 0.0
         self.lift_target = 0.0
+        # one-shot "jump": 0.0 idle, otherwise elapsed time into the hop
+        self.hop_t = 0.0
 
     def hit_test(self, pos):
         return self.visible and self.enabled and self.rect.collidepoint(pos)
@@ -187,6 +194,18 @@ class GameButton(object):
     def reset_hover(self):
         self.glow = self.glow_target = 0.0
         self.lift = self.lift_target = 0.0
+        self.hop_t = 0.0
+
+    def trigger_hop(self):
+        """Start a single up-and-back-down jump (used when a cell lights up
+        without being directly hovered)."""
+        self.hop_t = 1e-9
+
+    def _hop_offset(self):
+        if self.hop_t <= 0.0:
+            return 0
+        p = clamp01(self.hop_t / self.HOP_DURATION)
+        return int(round(-self.HOP_HEIGHT * math.sin(math.pi * p)))
 
     def animate(self, dt):
         if self.glow != self.glow_target:
@@ -197,17 +216,23 @@ class GameButton(object):
             self.lift = approach(self.lift, self.lift_target, dt, 19)
             if abs(self.lift - self.lift_target) < 0.004:
                 self.lift = self.lift_target
+        if self.hop_t > 0.0:
+            self.hop_t += dt
+            if self.hop_t >= self.HOP_DURATION:
+                self.hop_t = 0.0
 
     # ------------------------------------------------------------------
     def draw(self, surface):
         if not self.visible:
             return
+        hop = self._hop_offset()
         if self.lift > 0.015:
-            self._draw_lifted(surface)
+            self._draw_lifted(surface, hop)
         else:
-            self._paint_face(surface, self.rect.topleft, self.glow)
+            x0, y0 = self.rect.topleft
+            self._paint_face(surface, (x0, y0 + hop), self.glow)
 
-    def _draw_lifted(self, surface):
+    def _draw_lifted(self, surface, hop=0):
         lift = self.lift
         w, h = self.rect.w, self.rect.h
         scale = 1.0 + self.LIFT_SCALE * lift
@@ -218,7 +243,7 @@ class GameButton(object):
         if (sw, sh) != (w, h):
             face = pygame.transform.smoothscale(face, (sw, sh))
         cx = self.rect.centerx
-        cy = self.rect.centery - int(round(self.LIFT_RISE * lift))
+        cy = self.rect.centery - int(round(self.LIFT_RISE * lift)) + hop
         if self.bg_color is not None or self.bg_image is not None:
             shadow = soft_shadow(sw, sh, self.radius,
                                  alpha=int(150 * lift) + 15)
@@ -231,22 +256,29 @@ class GameButton(object):
         x0, y0 = topleft
         r = self.radius
         w, h = self.rect.w, self.rect.h
+        lit = glow > 0.01 and self.enabled
         if self.bg_color is not None:
             color = self.bg_color
-            if glow > 0.01 and self.enabled:
-                color = _brighten(color, int(64 * glow))
+            if lit:
+                color = _brighten(color, int(56 * glow))
             surface.blit(rounded_fill(w, h, color, r), (x0, y0))
+        elif self.bg_image is None and lit:
+            # a transparent face (e.g. a rule marker cell) still needs to read
+            # as highlighted — give it a soft glow fill
+            surface.blit(rounded_tint(w, h, WHITE, int(34 * glow), r),
+                         (x0, y0))
         if self.bg_image is not None:
             surface.blit(self.bg_image, (x0, y0))
-            if glow > 0.01 and self.enabled:
-                surface.blit(rounded_tint(w, h, WHITE, int(78 * glow), r),
+            if lit:
+                surface.blit(rounded_tint(w, h, WHITE, int(62 * glow), r),
                              (x0, y0))
         if self.border:
-            if glow > 0.01:
-                bcol = lerp_color(BG_COLOR, _brighten(BG_COLOR, 70), glow)
-            else:
-                bcol = BG_COLOR
-            surface.blit(rounded_border(w, h, bcol, r, 1), (x0, y0))
+            surface.blit(rounded_border(w, h, BG_COLOR, r, 1), (x0, y0))
+            if lit:
+                # a bright, bold outline so the highlight clearly stands out
+                g = round(glow, 1)
+                ocol = lerp_color(BG_COLOR, (255, 255, 255), 0.95 * g)
+                surface.blit(rounded_border(w, h, ocol, r, 3), (x0, y0))
         if self.text and self.font is not None:
             self._draw_text(surface, x0, y0)
 

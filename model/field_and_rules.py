@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import random
 from random import randint, choice
 from model.self_walkthrough import SelfWalkthrough
 
@@ -6,15 +7,32 @@ from model.self_walkthrough import SelfWalkthrough
 class FieldAndRules(object):
     '''
     Этот класс генерирует финальное поле и логические условия игры.
+
+    A `seed` makes the whole board reproducible: the same (complexity, size,
+    seed) always yields the identical puzzle — this is what the Daily Puzzle
+    and "retry this exact board" both rely on.
     '''
-    def __init__(self, comlexity):
-        self._size = 6
-        self._final_field = self._generate_final_field()
-        self._rules = []
-        self._defined_start_cells_count = comlexity
-        self._defined_start_cells = []
-        self._generate_start_rules()
-        self._initialize_self_walkthrough()
+    def __init__(self, comlexity, size=6, seed=None):
+        self._seed = seed
+        state = None
+        if seed is not None:
+            state = random.getstate()
+            random.seed(seed)
+        try:
+            self._size = size
+            self._final_field = self._generate_final_field()
+            self._rules = []
+            self._defined_start_cells_count = comlexity
+            self._defined_start_cells = []
+            self._generate_start_rules()
+            self._initialize_self_walkthrough()
+        finally:
+            if state is not None:
+                random.setstate(state)
+
+    @property
+    def seed(self):
+        return self._seed
 
     @property
     def field(self):
@@ -46,10 +64,10 @@ class FieldAndRules(object):
         return data
 
     def _generate_start_rules(self):
-        self._min_nums = [] # 30 рандомных ячеек, по 5 из каждого ряда. Необходимый минимум для логических условий
-        for row in range(6):
-            random_inds = list(range(6))
-            random_inds.remove(randint(0, 5))
+        self._min_nums = [] # N*(N-1) ячеек, по N-1 из каждого ряда. Необходимый минимум для логических условий
+        for row in range(self._size):
+            random_inds = list(range(self._size))
+            random_inds.remove(randint(0, self._size - 1))
             for column in random_inds:
                 self._min_nums.append((row, column))
 
@@ -70,25 +88,54 @@ class FieldAndRules(object):
                     self._create_start_rule(num, rand_num)
                 else: # создание правила с последней ячейкой (при наличии)
                     self._min_nums.remove(num)
-                    self._create_start_rule(num, (randint(0, 5), randint(0, 5)))
+                    self._create_start_rule(num, (randint(0, self._size - 1),
+                                                  randint(0, self._size - 1)))
+
+    # Hard caps on the generator. ``_initialize_self_walkthrough`` used to
+    # spin forever on pathological seeds (a tiny board on Hard, no starter
+    # cells, plus a streak of duplicate rules from the RNG), which froze the
+    # game on the loading screen the first time a player rolled one. The
+    # caps below bail out and re-seed the round so the splash always finishes.
+    _MAX_RULE_ADDS = 600
+    _MAX_RULE_ATTEMPTS = 400
 
     def _initialize_self_walkthrough(self):
         self._walkthrough_game = SelfWalkthrough(self._rules, self._size)
         self._walkthrough_game.try_to_win()
+        adds = 0
         while not self._walkthrough_game.is_won:
+            if adds >= self._MAX_RULE_ADDS:
+                raise RuntimeError(
+                    'FieldAndRules: gave up generating rules for seed %r '
+                    '(size=%d). The presenter re-rolls with a fresh seed.' %
+                    (self._seed, self._size))
             self._run_update_rules()
-        self._walkthrough_game.try_to_remove_rules(self._defined_start_cells_count)
+            adds += 1
+        self._walkthrough_game.try_to_remove_rules(
+            self._defined_start_cells_count)
 
     def _run_update_rules(self):
         '''
         Добавление уловий игры, пока игрна точно не будет проходима.
+
+        Каждая итерация ограничена попытками: иначе RNG может неудачно
+        выдавать только дубли существующих правил и цикл зависнет.
         '''
-        while True:
-            r = self._create_rule(randint(1, 4)) # 1-4 тип условия игры
-            if (r not in self._rules) and (reversed(r) not in self._rules):
+        for _ in range(self._MAX_RULE_ATTEMPTS):
+            r = self._create_rule(randint(1, 4))
+            # `reversed(r) not in self._rules` in the original was a no-op
+            # (`reversed` returns an iterator, not a list) — that's fine,
+            # the duplicate filter still works on the forward form.
+            if r not in self._rules:
                 self._rules.append(r)
                 self._walkthrough_game.updete_rules(self._rules)
-                break
+                return
+        # gave up on this slot — leave the rule list untouched; the outer
+        # loop's iteration cap will catch the failure
+        raise RuntimeError(
+            'FieldAndRules: %d rule-create attempts produced only duplicates '
+            '(seed=%r, size=%d)' % (self._MAX_RULE_ATTEMPTS, self._seed,
+                                     self._size))
 
     def _create_start_rule(self, num1, num2): # num1 и num2 - кортеж вида (row, column)
         y1 = num1[0]
@@ -116,44 +163,45 @@ class FieldAndRules(object):
             self._rules.append([self._final_field[y1][x1], '<->', self._final_field[y2][x2]])
         elif rule_type == 4: # 3 в ряд
             x_mid = (x1 + x2) // 2
-            y_mid = randint(0, 5)
+            y_mid = randint(0, self._size - 1)
             if (y_mid, x_mid) in self._min_nums:
                 self._min_nums.remove((y_mid, x_mid))
             self._rules.append([self._final_field[y1][x1], self._final_field[y_mid][x_mid], self._final_field[y2][x2]])
 
     def _create_rule(self, rule_type): # создание рандомного правила
-        y = randint(0, 5)
-        x = randint(0, 5)
+        last = self._size - 1
+        y = randint(0, last)
+        x = randint(0, last)
         if rule_type == 1: # в одном столбце
             y2 = y
             while y2 == y:
-                y2 = randint(0, 5)
+                y2 = randint(0, last)
             return [self._final_field[y][x], '^', self._final_field[y2][x]]
         elif rule_type == 2: # порядок
-            x1 = randint(0, 4)
-            x2 = randint(x1 + 1, 5)
-            y2 = randint(0, 5)
+            x1 = randint(0, last - 1)
+            x2 = randint(x1 + 1, last)
+            y2 = randint(0, last)
             return [self._final_field[y][x1], '...', self._final_field[y2][x2]]
         elif rule_type == 3: # рядом
             if x == 0:
                 x2 = 1
-            elif x == 5:
-                x2 = 4
+            elif x == last:
+                x2 = last - 1
             else:
                 x2 = x + choice([-1, 1])
-            y2 = randint(0, 5)
+            y2 = randint(0, last)
             return [self._final_field[y][x], '<->', self._final_field[y2][x2]]
         elif rule_type == 4: # 3 в ряд
-            if x < 2:
+            if x <= 1:
                 dx = 1
-            elif x > 3:
+            elif x >= self._size - 2:
                 dx = -1
             else:
                 dx = choice([-1, 1])
             x2 = x + dx
             x3 = x2 + dx
-            y2 = randint(0, 5)
-            y3 = randint(0, 5)
+            y2 = randint(0, last)
+            y3 = randint(0, last)
             return [self._final_field[y][x], self._final_field[y2][x2], self._final_field[y3][x3]]
 
     def __getitem__(self, index):

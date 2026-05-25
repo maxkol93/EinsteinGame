@@ -1,0 +1,29 @@
+name: phaser
+
+# Path-scoped so it never runs for pygame-only changes (and vice-versa) — the
+# two versions share this repo but build independently. See CLAUDE.md.
+on:
+  push:
+    paths:
+      - 'phaser/**'
+      - 'shared/**'
+      - '.github/workflows/phaser.yml'
+  pull_request:
+    paths:
+      - 'phaser/**'
+      - 'shared/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phaser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build

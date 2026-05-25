@@ -1,0 +1,63 @@
+name: deploy-itch
+
+# Auto-deploy the Phaser web build to itch.io via butler (itch's push CLI).
+# itch does NOT pull from GitHub — this job pushes to it on every change to the
+# Phaser tree that lands on main, and can also be run by hand from the Actions
+# tab (workflow_dispatch).
+#
+# Requires two repo settings (Settings → Secrets and variables → Actions):
+#   - Secret   BUTLER_API_KEY : an itch.io API key (itch.io → Settings → API keys)
+#   - Variable ITCH_TARGET    : "<itch-username>/<game-slug>" e.g. maxkol93/einstein
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'phaser/**'
+      - 'shared/**'
+      - '.github/workflows/deploy-itch.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-itch
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check config
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+        run: |
+          if [ -z "$BUTLER_API_KEY" ] || [ -z "$ITCH_TARGET" ]; then
+            echo "::error::Set the BUTLER_API_KEY secret and the ITCH_TARGET variable" \
+                 "(Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build
+        working-directory: phaser
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install butler
+        run: |
+          curl -sL -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip
+          chmod +x butler
+          ./butler -V
+
+      - name: Push to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          ./butler push phaser/dist "${{ vars.ITCH_TARGET }}:web" \
+            --userversion "1.0.${{ github.run_number }}"

@@ -105,7 +105,9 @@ class SelfWalkthrough(object):
         if len(defined_cells) == 2:
             self._define_other(defined_cells, rule)
         # если определена одна крайняя - определяем остальные
-        if len(defined_cells) == 1 and 0 in defined_cells or 2 in defined_cells:
+        # (без скобок `and` связывал сильнее `or`, и ветка срабатывала для
+        #  len==2 с индексом 2 — а нужно именно «ровно одна, и она крайняя»)
+        if len(defined_cells) == 1 and (0 in defined_cells or 2 in defined_cells):
             if list(defined_cells.values())[0] <= 1 or list(defined_cells.values())[0] >= (self._size - 2):
                 self._define_other(defined_cells, rule)
         else:
@@ -131,7 +133,12 @@ class SelfWalkthrough(object):
 
 #----------------проверки по правилам----------------------------------------------
 
+    def _in_bounds(self, y, x):
+        return 0 <= y < self._size and 0 <= x < self._size
+
     def _num_in_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return False
         if type(self._field[y][x]) == int:
             return n == self._field[y][x]
         elif n in self._field[y][x]:
@@ -260,6 +267,8 @@ class SelfWalkthrough(object):
                             self._remove_all_batton_in_row(row, other_number)
 
     def _define_this_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return
         if type(self._field[y][x]) == list:
             self._undefined_count -= 1
             self._field[y][x] = n
@@ -286,6 +295,8 @@ class SelfWalkthrough(object):
             self._check_row(row, btn)
 
     def _remove_number_in_cell(self, y, x, n):
+        if not self._in_bounds(y, x):
+            return
         if type(self._field[y][x]) == list:
             if n in self._field[y][x]:
                 self._field[y][x].remove(n)
