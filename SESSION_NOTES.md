@@ -1,6 +1,29 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-05-24**.
+Quick context for resuming work. Latest session: **2026-05-25**.
+
+## 2026-05-25 — pygame paused, Phaser port started
+
+**Decision:** stop investing in the pygame/pygbag web build and port the game to
+**Phaser 3 + TypeScript + Vite**. Reasons: poor browser performance, web-audio
+(pygame mixer) stutter/lag, and the heavy ~13.8 MB bundle. pygame is *paused, not
+deleted* — it stays buildable as the reference implementation.
+
+- Committed & pushed all remaining pygame work (the 2026-05-20 reshape → 2026-05-24
+  mobile pass) as `d1cf7a6`.
+- Added **`CLAUDE.md`** at repo root — the authoritative, session-loaded guide:
+  version states, repo layout, and the parallel-dev rules (one repo, no fork/no
+  long-lived branch since the trees share no code; `shared/` source of truth;
+  Daily must stay identical across versions; CI split by path).
+- Scaffolded **`phaser/`**: Phaser 3 + TS + Vite, `BootScene` + a placeholder
+  `GameScene` (grid + candidate squares + pointer "pop") in the real Mocha
+  palette. `npm run build` is green; bundle ~340 KB gzipped.
+- Added **`shared/`** (`palette.json` mirroring `view/palettes.py`,
+  `daily_vectors.json` stub + contract README) and
+  `.github/workflows/phaser.yml` (path-scoped CI: typecheck + build).
+
+**Next:** port the puzzle model (`field_and_rules.py`), cascade, then the seeded
+daily generator (validate against `shared/daily_vectors.json`).
 
 ## Done — 2026-05-24 (mobile tweaks)
 

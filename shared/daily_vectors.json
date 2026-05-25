@@ -1,0 +1,5 @@
+{
+  "_comment": "Seed -> expected puzzle fixtures dumped from the pygame model/daily.py. The Phaser daily generator MUST reproduce these exactly so the puzzle-of-the-day matches across versions. Empty until the generator port begins; populate with a dump script (see shared/README.md).",
+  "schemaVersion": 1,
+  "vectors": []
+}
