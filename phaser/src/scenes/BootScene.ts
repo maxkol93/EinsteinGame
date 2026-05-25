@@ -10,6 +10,6 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.scene.start('game');
+    this.scene.start('menu');
   }
 }

@@ -25,6 +25,31 @@ deleted* — it stays buildable as the reference implementation.
 **Next:** port the puzzle model (`field_and_rules.py`), cascade, then the seeded
 daily generator (validate against `shared/daily_vectors.json`).
 
+## 2026-05-25 — Phaser is playable (full puzzle logic)
+
+Ported the whole puzzle model to TS and built a playable game on top of it.
+
+- **Model (`phaser/src/model/`, no Phaser deps):** `rng.ts` (seeded PRNG,
+  Python-`randint` semantics — mulberry32, NOT CPython MT yet), `decoder.ts`
+  (glyph + clue text), `selfWalkthrough.ts` (faithful port of the deductive
+  solver), `fieldAndRules.ts` (board + clue generator; grows clues until the
+  solver certifies no-guess solvable, then trims), `board.ts` (player board:
+  pop/define + the row cascade, answer-grid-guarded like the pygame view).
+- **Game (`phaser/src/scenes/`):** `MenuScene` (size 4/5/6 × Easy/Normal/Hard)
+  and `GameScene` (board with candidate sub-grids per cell, row colour =
+  category, tap-to-pop, right-click/long-press-to-define, staggered cascade
+  animation, lives/timer, clickable clue panel, win/lose overlay with New/Retry/
+  Menu). Shared `ui/button.ts`.
+- **Verified:** `npm run smoke` generates 270 boards across every size/difficulty
+  — all logically solvable, cascade-correct and deterministic (~6 s). `npm run
+  verify` (Playwright headless) loads the build and plays menu → game → pointer
+  pop+cascade → auto-solve → win with **zero console/page errors**; 6×6 Hard
+  (22 clues) lays out cleanly. `npm run build` green, ~348 KB gz.
+
+**Not yet ported (later):** exact Daily/Weekly/Monthly (needs CPython-MT-matching
+RNG validated against `shared/daily_vectors.json`), stats/achievements/Zen/
+tutorial, and the juice + sound pass.
+
 ## Done — 2026-05-24 (mobile tweaks)
 
 - **Portrait only on actual phones.** `view/window.py` now picks orientation by

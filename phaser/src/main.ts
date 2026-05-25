@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import { COLORS, GAME } from './config';
 import { BootScene } from './scenes/BootScene';
+import { MenuScene } from './scenes/MenuScene';
 import { GameScene } from './scenes/GameScene';
 
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
   backgroundColor: COLORS.bg,
@@ -13,5 +14,8 @@ new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, GameScene],
+  scene: [BootScene, MenuScene, GameScene],
 });
+
+// handy for debugging / automated checks from the browser console
+(window as unknown as { game: Phaser.Game }).game = game;
