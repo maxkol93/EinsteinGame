@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 from random import choice
 
 import pygame
@@ -14,38 +15,85 @@ from view.anim import clamp01, ease_out_back, ease_out_cubic, lerp
 from view.ui import (MenuOverlay, ResultOverlay, TextButton, make_heart,
                      draw_text, draw_tutorial_progress, TutorialPopup,
                      TutorialResultOverlay, TutorialMenuOverlay,
-                     BlockSelectOverlay, AchievementsOverlay, set_click_sfx)
+                     BlockSelectOverlay, AchievementsOverlay, set_click_sfx,
+                     set_ui_scale)
 from view.decoder import rule_segments, symbol_for
 from model.tutorial import BLOCK_NAMES
 import view.buttons as buttons_mod
 
 
-# Layout. Three columns: a left panel (timer + lives), the board, and a
-# right panel (clues). The board always occupies the same square area
-# (BOARD_SPAN px); the cell size shrinks as the grid grows (4x4 .. 6x6), so
-# the window and the web framebuffer stay a fixed size for every board.
+# Layout. Two orientations share the same board/cell/overlay code; only the
+# placement of the three regions (info panel, board, clues) differs.
+#  * Landscape (desktop): three columns — left panel | board | right clues.
+#  * Portrait (phone/web): a slim info strip on top, the board maximised by
+#    width below it, the clues spread across the bottom.
+# The board always occupies a fixed square (BOARD_SPAN px); the cell size
+# shrinks as the grid grows (4x4 .. 6x6), so the framebuffer stays fixed.
+#
+# Orientation is decided once, at import. Portrait is used only when the
+# viewport is taller than it is wide — i.e. a phone held upright. Desktop
+# browsers (and the desktop app) are wider than tall, so they get landscape.
+# EINSTEIN_PORTRAIT forces it either way (handy for testing / a forced build).
+_IS_WEB = sys.platform == 'emscripten'
+
+
+def _detect_portrait():
+    env = os.environ.get('EINSTEIN_PORTRAIT')
+    if env is not None:
+        try:
+            return bool(int(env))
+        except (ValueError, TypeError):
+            return False
+    if _IS_WEB:
+        try:
+            import platform as _pf
+            return bool(_pf.window.innerHeight > _pf.window.innerWidth)
+        except Exception:
+            return False
+    return False
+
+
+PORTRAIT = _detect_portrait()
+
 CELL_GAP = 3
-BOARD_SPAN = 615             # the board's fixed pixel extent
 DEFAULT_SIZE = 6
 RULE_CELL = 38               # clue mini-button — fixed, independent of board
-
-FIELD_W = FIELD_H = BOARD_SPAN
-
-PANEL_W = 280          # the left and the right panel share one width
-MARGIN = 60            # uniform gap framing the board on every side
-SIDEBAR_W = PANEL_W    # left-panel width (name kept for the sidebar code)
-
-INDENT_LEFT = PANEL_W + MARGIN          # board origin x
-INDENT_TOP = MARGIN                     # board origin y
-
-RULES_PANEL_W = PANEL_W
-RULES_PANEL_X = INDENT_LEFT + FIELD_W + MARGIN   # right panel origin x
-RULES_TOP = 54                          # first rule row, y inside the panel
-
-CANVAS_WIDTH = PANEL_W + MARGIN + FIELD_W + MARGIN + PANEL_W
-CANVAS_HEIGHT = MARGIN + FIELD_H + MARGIN
-
 HOVER_PROPAGATE_DELAY = 0.2  # seconds before a hover fans out to linked cells
+
+if PORTRAIT:
+    MARGIN = 14
+    CANVAS_WIDTH = 760
+    BOARD_SPAN = CANVAS_WIDTH - 2 * MARGIN          # board maximised by width
+    TOP_H = 168                                     # top info strip height
+    CLUES_GAP = 12                                  # board -> clues gap
+    # holds the worst case (6x6 ~26 clues -> 6 rows of 46 px + header) with a
+    # little slack; smaller boards just leave the lower part empty
+    RULES_AREA_H = 330                              # clues panel height
+    CANVAS_HEIGHT = TOP_H + BOARD_SPAN + CLUES_GAP + RULES_AREA_H + MARGIN
+    FIELD_W = FIELD_H = BOARD_SPAN
+    INDENT_LEFT = MARGIN                            # board origin x
+    INDENT_TOP = TOP_H                              # board origin y
+    PANEL_W = SIDEBAR_W = RULES_PANEL_W = CANVAS_WIDTH
+    RULES_PANEL_X = 0
+    RULES_AREA_TOP = INDENT_TOP + BOARD_SPAN + CLUES_GAP   # clues backing top
+    RULES_TOP = RULES_AREA_TOP + 32                 # first clue row (after head)
+else:
+    BOARD_SPAN = 615             # the board's fixed pixel extent
+    FIELD_W = FIELD_H = BOARD_SPAN
+    PANEL_W = 280          # the left and the right panel share one width
+    MARGIN = 60            # uniform gap framing the board on every side
+    SIDEBAR_W = PANEL_W    # left-panel width (name kept for the sidebar code)
+    INDENT_LEFT = PANEL_W + MARGIN          # board origin x
+    INDENT_TOP = MARGIN                     # board origin y
+    RULES_PANEL_W = PANEL_W
+    RULES_PANEL_X = INDENT_LEFT + FIELD_W + MARGIN   # right panel origin x
+    RULES_TOP = 54                          # first rule row, y inside the panel
+    CANVAS_WIDTH = PANEL_W + MARGIN + FIELD_W + MARGIN + PANEL_W
+    CANVAS_HEIGHT = MARGIN + FIELD_H + MARGIN
+    TOP_H = 0                               # (portrait-only fields, unused)
+    CLUES_GAP = 0
+    RULES_AREA_TOP = 0
+    RULES_AREA_H = CANVAS_HEIGHT
 
 
 def _cell_side_for(size):
@@ -202,9 +250,10 @@ class GameWindow(object):
         self._lifted_widget = None
         self._hovered_group = None
 
-        # tooltips + touch
+        # tooltips + touch + reduce-motion
         self._tooltips_enabled = True
         self._touch_mode = False
+        self._reduce_motion = False
         self._armed = None       # touch: a tapped-once widget awaiting confirm
         self._press = None       # a held field tile: {'btn': ..., 't': secs}
 
@@ -214,13 +263,36 @@ class GameWindow(object):
         self._confetti_timer = 0.0
         self._stats_summary = None
 
-        # in-game hint: a cell whose correct candidate is briefly ringed
+        # in-game hint: a candidate to pop together with the rule that
+        # justifies the elimination. A HINT button offers it; the highlight
+        # then stays put until the player makes a move (it is not auto-cleared
+        # on a timer).
         self._hint_btn = None
-        self._hint_t = 0.0
+        self._hint_group = None
+        # idle timer + hint-button configuration. Easy/Normal reveal the HINT
+        # button after a difficulty-dependent idle window; Hard never does;
+        # Zen always shows it (set below / by the presenter).
+        self._idle_t = 0.0
+        self._idle_hint_delay = None        # None = no idle offer (Hard)
+        self._hint_offered = False          # latched once idle offers the button
 
         # cells resolved together by one click pop in as a cascade: each is
         # collected here, then flushed with a staggered delay
         self._batch_big = []
+
+        # The full answer grid (solution[y][x] -> value). When set, a cell
+        # always resolves to its *correct* value rather than to whatever value
+        # a cascade step happened to derive — this makes the cascade immune to
+        # the stale/contradictory request that used to blank a cell and
+        # soft-lock the board. None for the free gesture-practice block, where
+        # any surviving candidate is a valid answer.
+        self._solution = None
+        # Block 0 (gesture practice) turns the row cascade off so each cell is
+        # solved by its own gesture and the click count is exact.
+        self._row_cascade = True
+        # cascade depth within the current action — drives the rising pick
+        # pitch (combo-pitch) and the "+N chain!" readout
+        self._chain_n = 0
 
         # Handler hooks (presenter registers these)
         self.on_field_click = None
@@ -230,17 +302,21 @@ class GameWindow(object):
         self.on_restart = None         # deal a fresh board
         self.on_retry = None           # replay the exact same board
         self.on_daily = None           # start today's Daily Puzzle
+        self.on_weekly = None          # start this week's Weekly Puzzle
+        self.on_monthly = None         # start this month's Monthly Puzzle
         self.on_achievements = None    # open the badges screen
         self.on_share = None           # copy the result line
         self.on_mode_select = None
         self.on_size_select = None
         self.on_open_menu = None
         self.on_volume = None
+        self.on_music = None           # ambient-music volume changed
+        self.on_reduce_motion = None   # reduce-motion toggled
         self.on_tooltips = None
         self.on_touch = None
         self.on_zen = None
-        self.on_theme = None
-        self.on_hint = None
+        self.on_hint = None            # presenter notifies for stats (unused
+                                       # by HINT button — see auto-hint)
         self.on_block_replay = None    # tutorial: replay a chosen block
 
         self._build_field_buttons()
@@ -251,13 +327,17 @@ class GameWindow(object):
 
         # let every overlay widget answer a press with the UI click sound
         set_click_sfx(lambda: self._play('click'))
+        # enlarge every popup on the portrait/mobile build for legibility
+        set_ui_scale(1.28 if PORTRAIT else 1.0)
 
     # --------------------------- loading -----------------------------
 
     def _load_fonts(self):
         reg = os.path.join(self._fonts_dir, 'DejaVuSans.ttf')
         bold = os.path.join(self._fonts_dir, 'DejaVuSans-Bold.ttf')
-        self._font_msg = pygame.font.Font(reg, 16)
+        # the feedback message + clue tooltip read at arm's length on a phone,
+        # so they grow in portrait
+        self._font_msg = pygame.font.Font(reg, 22 if PORTRAIT else 16)
         # candidate + big-cell glyphs scale with the (size-dependent) cell
         cand_sub = self._cell_side // self._cand_cols
         self._font_field = pygame.font.Font(bold, max(11, int(cand_sub * 0.42)))
@@ -266,6 +346,8 @@ class GameWindow(object):
         self._font_timer = pygame.font.Font(bold, 31)
         self._font_menu = pygame.font.Font(bold, 18)
         self._font_label = pygame.font.Font(bold, 12)
+        # the in-board hint pill ("pop this …") — much larger on the phone
+        self._font_hint = pygame.font.Font(bold, 20 if PORTRAIT else 13)
         self._ui_fonts = {
             'title': pygame.font.Font(bold, 46),
             'h1': pygame.font.Font(bold, 30),
@@ -320,6 +402,9 @@ class GameWindow(object):
     def _build_rules_buttons(self, rules):
         rules.sort(key=lambda r: (1, r[1]) if isinstance(r[1], str) else (0, r[1]),
                    reverse=True)
+        if PORTRAIT:
+            self._build_rules_buttons_portrait(rules)
+            return
         mini = RULE_CELL
         rule_w = mini * 3
         col_gap = 16
@@ -334,16 +419,55 @@ class GameWindow(object):
             b3 = RuleButton(i, rule[2], (group_x + 2 * mini, group_y, mini, mini), self._font_rule)
             self._rules_buttons.append([b1, b2, b3])
 
+    def _build_rules_buttons_portrait(self, rules):
+        """Clues fill the bottom strip in as many columns as the width allows,
+        read left-to-right, top-to-bottom."""
+        mini = RULE_CELL
+        rule_w = mini * 3
+        col_gap = 14
+        row_h = mini + 8
+        n_cols = max(1, (CANVAS_WIDTH - 2 * MARGIN + col_gap)
+                     // (rule_w + col_gap))
+        total_w = n_cols * rule_w + (n_cols - 1) * col_gap
+        start_x = (CANVAS_WIDTH - total_w) // 2
+        for i, rule in enumerate(rules):
+            col, row = i % n_cols, i // n_cols
+            gx = start_x + col * (rule_w + col_gap)
+            gy = RULES_TOP + row * row_h
+            b1 = RuleButton(i, rule[0], (gx, gy, mini, mini), self._font_rule)
+            b2 = RuleButton(i, rule[1], (gx + mini, gy, mini, mini), self._font_rule)
+            b3 = RuleButton(i, rule[2], (gx + 2 * mini, gy, mini, mini), self._font_rule)
+            self._rules_buttons.append([b1, b2, b3])
+
     def _build_sidebar(self):
         base = buttons_mod._brighten(self._palette['panel'], 44)
+        accent = buttons_mod._brighten(self._palette['panel'], 70)
+        if PORTRAIT:
+            # menu (left) and hint (right) live in the top info strip
+            bw = 132
+            self._menu_button = TextButton(
+                (MARGIN, 16, bw, 48), 'MENU', self._font_menu, base,
+                self._palette['text'], on_click=self._request_menu,
+                radius=12, accent=accent)
+            self._hint_button = TextButton(
+                (CANVAS_WIDTH - MARGIN - bw, 16, bw, 48), 'HINT',
+                self._font_menu, base, self._palette['text'],
+                on_click=self._on_hint_pressed, radius=12, accent=accent)
+            self._hint_button.visible = False
+            return
         self._menu_button = TextButton(
             (24, 22, SIDEBAR_W - 48, 48), 'MENU', self._font_menu,
             base, self._palette['text'], on_click=self._request_menu,
-            radius=12, accent=buttons_mod._brighten(self._palette['panel'], 70))
+            radius=12, accent=accent)
+        # The HINT button sits at the bottom of the left panel. It is hidden
+        # until offered — after an idle window on Easy/Normal, always in Zen
+        # (a free hint), never on Hard or during the tutorial. Pressing it
+        # rings a candidate to pop and the clue that justifies it.
         self._hint_button = TextButton(
-            (28, 470, SIDEBAR_W - 56, 42), 'HINT', self._font_menu,
-            base, self._palette['text'], on_click=self._request_hint,
-            radius=12)
+            (24, CANVAS_HEIGHT - 94 - 14 - 46, SIDEBAR_W - 48, 46), 'HINT',
+            self._font_menu, base, self._palette['text'],
+            on_click=self._on_hint_pressed, radius=12, accent=accent)
+        self._hint_button.visible = False
 
     def _make_shadow_strip(self, dark_on_right):
         """A 16px soft shadow strip cast by a panel onto the board area."""
@@ -379,6 +503,25 @@ class GameWindow(object):
         if not enabled:
             self._armed = None
 
+    def set_reduce_motion(self, enabled):
+        """Accessibility: damp screenshake, the cascade slow-mo and the heavy
+        particle bursts. Forwarded to the effects layer."""
+        self._reduce_motion = bool(enabled)
+        self._effects.set_reduced(self._reduce_motion)
+
+    def set_solution(self, grid):
+        """Hand the view the full answer grid so every cascade step resolves a
+        cell to its correct value. Must be called before ``define_start_cells``.
+        Pass None to keep the legacy "resolve to the derived value" behaviour
+        (the free gesture-practice block)."""
+        self._solution = grid
+
+    def set_row_cascade(self, enabled):
+        """Whether resolving a cell strikes its value down the rest of the row
+        and auto-solves any cell it forces. On for real puzzles; off for the
+        gesture-practice block so each cell costs exactly one gesture."""
+        self._row_cascade = bool(enabled)
+
     def set_lives(self, max_lives):
         self._max_lives = max_lives
         self._lives = max_lives
@@ -403,6 +546,10 @@ class GameWindow(object):
                             life_range=(0.3, 0.55), size=3)
 
     def disable_rule_buttons(self, btn, index):
+        # interacting with a clue counts as "making a move" — retire the hint
+        self._hint_btn = None
+        self._hint_group = None
+        self._idle_t = 0.0
         for sub in self._rules_buttons[index]:
             sub.pressed = not sub.pressed
             sub.change_color()
@@ -475,23 +622,32 @@ class GameWindow(object):
 
     # --------------------------- overlays ----------------------------
 
-    def open_menu(self, finished=False, daily=None):
+    def open_menu(self, finished=False, daily=None, weekly=None,
+                  monthly=None, size_locks=None, diff_locks=None):
         self._effects.calm()
         self._armed = None
         self._menu_finished = finished
         self._menu_daily = daily
+        self._menu_weekly = weekly
+        self._menu_monthly = monthly
+        self._menu_size_locks = size_locks
+        self._menu_diff_locks = diff_locks
         vol = self._sounds.volume if self._sounds else 0.7
+        music = self._sounds.music_volume if self._sounds else 0.5
         callbacks = {
             'continue': self._menu_continue,
             'restart': lambda: self.on_restart and self.on_restart(),
             'daily': self._menu_daily_start,
+            'weekly': self._menu_weekly_start,
+            'monthly': self._menu_monthly_start,
             'achievements': lambda: (self.on_achievements
                                      and self.on_achievements()),
             'mode': lambda d: self.on_mode_select and self.on_mode_select(d),
             'size': lambda s: self.on_size_select and self.on_size_select(s),
             'tutorial': self.open_tutorial,
             'volume': lambda v: self.on_volume and self.on_volume(v),
-            'theme': self._menu_theme,
+            'music': self._menu_music,
+            'reduce_motion': self._menu_reduce_motion,
             'tooltips': self._menu_tooltips,
             'touch': self._menu_touch,
             'zen': self._menu_zen,
@@ -501,12 +657,26 @@ class GameWindow(object):
                                     self._difficulty, self._sel_size, vol,
                                     callbacks, tooltips=self._tooltips_enabled,
                                     touch=self._touch_mode, zen=self._zen,
-                                    finished=finished, daily=daily)
+                                    finished=finished, daily=daily,
+                                    weekly=weekly, monthly=monthly,
+                                    size_locks=size_locks,
+                                    diff_locks=diff_locks, music=music,
+                                    reduce_motion=self._reduce_motion)
 
     def _menu_daily_start(self):
         self.close_overlay()
         if self.on_daily:
             self.on_daily()
+
+    def _menu_weekly_start(self):
+        self.close_overlay()
+        if self.on_weekly:
+            self.on_weekly()
+
+    def _menu_monthly_start(self):
+        self.close_overlay()
+        if self.on_monthly:
+            self.on_monthly()
 
     def _menu_zen(self, value):
         # only persist the choice — the live board keeps the rules it was
@@ -520,8 +690,7 @@ class GameWindow(object):
         self._overlay = AchievementsOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             set(unlocked or []), summary or {},
-            on_close=lambda: self.open_menu(self._menu_finished,
-                                            self._menu_daily))
+            on_close=self._reopen_menu)
 
     def open_tutorial(self):
         """Menu 'Tutorial' button (post-onboarding): pick a block to replay."""
@@ -530,8 +699,17 @@ class GameWindow(object):
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             list(BLOCK_NAMES),
             on_pick=lambda i: self.on_block_replay and self.on_block_replay(i),
-            on_close=lambda: self.open_menu(self._menu_finished,
-                                            self._menu_daily))
+            on_close=self._reopen_menu)
+
+    def _reopen_menu(self):
+        """Reopen the main menu with the same state it had before a subscreen
+        (progress / replay-picker) was opened."""
+        self.open_menu(finished=self._menu_finished,
+                       daily=getattr(self, '_menu_daily', None),
+                       weekly=getattr(self, '_menu_weekly', None),
+                       monthly=getattr(self, '_menu_monthly', None),
+                       size_locks=getattr(self, '_menu_size_locks', None),
+                       diff_locks=getattr(self, '_menu_diff_locks', None))
 
     # --------------------- tutorial overlays -------------------------
 
@@ -544,17 +722,20 @@ class GameWindow(object):
         """Screen rect bounding the displayed clue buttons (for a spotlight)."""
         rects = [sub.rect for grp in self._rules_buttons for sub in grp]
         if not rects:
+            if PORTRAIT:
+                return pygame.Rect(MARGIN, RULES_AREA_TOP,
+                                   CANVAS_WIDTH - 2 * MARGIN, 90)
             return pygame.Rect(RULES_PANEL_X + 30, 40, RULES_PANEL_W - 60, 90)
         bounds = rects[0].unionall(rects[1:])
         return bounds.inflate(30, 30)
 
     def show_popup(self, text, button_label='Got it', on_done=None,
-                   tag='TUTORIAL', spotlight=None):
+                   tag='TUTORIAL', spotlight=None, animation=None):
         self._armed = None
         self._overlay = TutorialPopup(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             text, button_label=button_label, on_done=on_done, tag=tag,
-            spotlight=spotlight)
+            spotlight=spotlight, animation=animation)
 
     def show_tutorial_result(self, title, message, tracker,
                              button_label='Continue', on_continue=None,
@@ -575,6 +756,18 @@ class GameWindow(object):
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             list(tracker), vol, callbacks)
 
+    def _menu_music(self, value):
+        if self._sounds is not None:
+            self._sounds.set_music_volume(value)
+            self._sounds.start_music()   # a tweak also kicks the loop alive
+        if self.on_music:
+            self.on_music(float(value))
+
+    def _menu_reduce_motion(self, value):
+        self.set_reduce_motion(value)
+        if self.on_reduce_motion:
+            self.on_reduce_motion(bool(value))
+
     def _menu_tooltips(self, value):
         self._tooltips_enabled = bool(value)
         if self.on_tooltips:
@@ -593,13 +786,13 @@ class GameWindow(object):
             'share': lambda: self.on_share and self.on_share(),
         }
 
-    def show_win(self, stars=0, score=0, best_score=0, badges=None,
+    def show_win(self, best_text=None, new_record=False, badges=None,
                  daily=None):
         msg = choice(_WIN_MSGS)
         self._overlay = ResultOverlay(
             (CANVAS_WIDTH, CANVAS_HEIGHT), self._palette, self._ui_fonts,
             True, msg, self._timer_text, self._result_callbacks(),
-            stars=stars, score=score, best_score=best_score,
+            best_text=best_text, new_record=new_record,
             badges=list(badges or []), daily=daily)
         self._effects.celebrate()
 
@@ -619,11 +812,6 @@ class GameWindow(object):
         if self.on_open_menu:
             self.on_open_menu()
 
-    def _request_hint(self):
-        self._play('click')
-        if self.on_hint:
-            self.on_hint()
-
     def _menu_continue(self):
         # the 'click' is played by the overlay's widget routing
         self.close_overlay()
@@ -635,22 +823,19 @@ class GameWindow(object):
         """True while the menu is the one opened over a won/lost board."""
         return self._menu_finished
 
-    def _menu_theme(self):
-        self._cycle_palette()
-        if self.on_theme:
-            self.on_theme(self._palette_name)
-        if isinstance(self._overlay, MenuOverlay):
-            self.open_menu(self._menu_finished)  # rebuild with the new palette
-
     # --------------------------- cell logic --------------------------
 
-    BIG_CASCADE_STEP = 0.12   # gap between consecutive cells popping in
+    BIG_CASCADE_STEP = 0.20   # gap between consecutive big cells popping in
+    ROW_CASCADE_STEP = 0.13   # extra gap between small pops along one row
 
     def remove_button(self, btn):
         """Pop one candidate. Whatever that resolves — the cell itself, then
         the rest of its row — pops in as a staggered cascade."""
         self._hint_btn = None      # any board change retires a stale hint
+        self._hint_group = None
+        self._idle_t = 0.0         # progress counts as activity
         self._cascade_t = 0.0
+        self._chain_n = 0
         cur_n, cur_y, cur_x = btn.n, btn.y, btn.x
         cell = self._cells[cur_y][cur_x]
         if not (isinstance(cell, list) and btn in cell):
@@ -670,7 +855,10 @@ class GameWindow(object):
         if not isinstance(cell, list) or keep_btn not in cell:
             return
         self._hint_btn = None
+        self._hint_group = None
+        self._idle_t = 0.0
         self._cascade_t = 0.0
+        self._chain_n = 0
         # _cascade_resolve pops every candidate, blooms the big cell, clears
         # the row and re-checks each cleared value — the whole job
         self._cascade_resolve(y, x, list(cell), keep_btn.n)
@@ -680,19 +868,39 @@ class GameWindow(object):
         """Cell (row, x) flips to the solved big cell `n` as the next cascade
         step: every candidate still in it pops and the big cell blooms on the
         same staggered beat, then the value clears down the rest of the row."""
+        # Resolve to the cell's *correct* value when we know it. A stale
+        # cascade beat could otherwise ask to place a value already solved
+        # elsewhere in the row, which used to blank this cell (no big cell, no
+        # solved-count bump) and soft-lock the board.
+        if self._solution is not None:
+            try:
+                n = self._solution[row][x]
+            except (IndexError, TypeError, KeyError):
+                pass
         step = self._cascade_t
         self._cascade_t += self.BIG_CASCADE_STEP
+        self._chain_n += 1
+        pitch = self._chain_n          # rising pick pitch down the chain
         self._cells[row][x] = None
         for b in buttons:
-            self._spawn_small_pop(b, step)
+            self._spawn_small_pop(b, step, pitch=pitch)
         self._create_big_button(row, x, n, step)
-        self._remove_all_in_row(row, n, step)
+        self._remove_all_in_row(row, n, step, pitch=pitch)
         # a candidate value cleared from this cell may now be unique elsewhere
         for b in buttons:
             if b.n != n:
                 self._check_last_in_row(row, b.n)
 
-    def _remove_all_in_row(self, row, number, delay):
+    def _remove_all_in_row(self, row, number, delay, pitch=0):
+        """Strike `number` from every still-active candidate cell in `row`.
+
+        Each removed candidate gets its own tiny stagger on top of the base
+        ``delay`` so the wave is visible — without the per-cell offset, the
+        whole row of small pops fires in one frame and reads as a single
+        flash rather than a cascade."""
+        if not self._row_cascade:
+            return
+        step = 0
         for x, cell in enumerate(self._cells[row]):
             if not isinstance(cell, list):
                 continue
@@ -706,9 +914,14 @@ class GameWindow(object):
                 self._cascade_resolve(row, x, list(cell), survivor.n)
             else:
                 cell.remove(match)
-                self._spawn_small_pop(match, delay)
+                self._spawn_small_pop(match,
+                                      delay + step * self.ROW_CASCADE_STEP,
+                                      pitch=pitch, sound=False)
+                step += 1
 
     def _check_last_in_row(self, row, number):
+        if not self._row_cascade:
+            return
         count, column, found = 0, -1, None
         for x, cell in enumerate(self._cells[row]):
             if not isinstance(cell, list):
@@ -721,6 +934,14 @@ class GameWindow(object):
 
     def _create_big_button(self, y, x, n, delay=0.0):
         from view.decoder import decode_symbol
+        # In a real puzzle a value lives once per row, so a (now solution-
+        # corrected) request to place one twice is dropped defensively. The
+        # free gesture-practice block has no such constraint and the row
+        # cascade is off there — two cells may legitimately end on the same
+        # glyph, so we must NOT drop it (dropping would blank the cell and
+        # soft-lock the board).
+        if self._row_cascade and any(big.n == n for big in self._big_buttons):
+            return None
         self._defined_cells_count += 1
         bg = self._big_bg[n // 10]
         ox, oy = self._cell_origin(y, x)
@@ -754,9 +975,30 @@ class GameWindow(object):
         # one resolving chime per action; the staggered 'pick' ticks the
         # small pops schedule are what make the cascade audible as a run
         self._play('solve')
-        # a chunky cascade earns a brief slow-mo as it kicks off
+        # a chunky cascade earns a brief slow-mo and a floating "+N chain!"
         if len(batch) >= 3:
             self._slowmo_t = self.SLOWMO_DUR
+            self._spawn_combo_text(len(batch), batch)
+
+    def _spawn_combo_text(self, n, batch):
+        cx = sum(b.rect.centerx for b, _ in batch) / len(batch)
+        cy = sum(b.rect.centery for b, _ in batch) / len(batch)
+        self._effects.combo_text(self._render_combo_label('+%d chain!' % n),
+                                 cx, cy)
+
+    def _render_combo_label(self, text):
+        font = self._ui_fonts['h1']
+        gold, dark, pad = (255, 214, 120), (38, 28, 20), 3
+        base = font.render(text, True, gold)
+        outline = font.render(text, True, dark)
+        w, h = base.get_size()
+        surf = pygame.Surface((w + pad * 2, h + pad * 2), pygame.SRCALPHA)
+        for ox in (-2, 0, 2):
+            for oy in (-2, 0, 2):
+                if ox or oy:
+                    surf.blit(outline, (pad + ox, pad + oy))
+        surf.blit(base, (pad, pad))
+        return surf
 
     def _snapshot_button(self, button):
         snap = pygame.Surface(button.rect.size, pygame.SRCALPHA)
@@ -772,8 +1014,9 @@ class GameWindow(object):
         ox, oy = self._cell_origin(btn.y, btn.x)
         rect = pygame.Rect(ox, oy, self._cell_side, self._cell_side)
         self._effects.wrong_click(rect)
+        self._idle_t = 0.0       # a mistake counts as activity too
 
-    def _spawn_small_pop(self, btn, delay=0.0):
+    def _spawn_small_pop(self, btn, delay=0.0, pitch=0, sound=True):
         if getattr(self, '_suppress_effects', False):
             return
         color = btn.bg_color or (90, 90, 90)
@@ -781,7 +1024,14 @@ class GameWindow(object):
         ghost = Ghost(btn.rect, color, btn.text, btn.font, descent_shift,
                       delay=delay)
         self._effects.small_pop(ghost, color, delay=delay)
-        self._play_at(delay, 'pick')
+        # Sound only on a cell *resolving* (one pick per cell in the chain, at
+        # its combo pitch). The many row-strike shimmer pops stay silent — a
+        # pick per struck candidate was both noisy and the main source of web
+        # audio lag.
+        if sound:
+            key = (self._sounds.pick_for_step(pitch)
+                   if self._sounds is not None else 'pick')
+            self._play_at(delay, key)
 
     def _play_at(self, delay, key):
         """Play a sound now, or schedule it `delay` seconds ahead — so a
@@ -877,49 +1127,6 @@ class GameWindow(object):
         cy = cell_origin_y + side // 2
         surface.blit(temp, (cx - sw // 2, cy - sh // 2))
 
-    # --------------------------- palette switching -------------------
-
-    PALETTE_CYCLE = ['mocha', 'nord', 'sunset']
-
-    def _cycle_palette(self):
-        cur = getattr(self, '_palette_name', 'mocha')
-        try:
-            i = self.PALETTE_CYCLE.index(cur)
-        except ValueError:
-            i = -1
-        self.apply_palette_runtime(self.PALETTE_CYCLE[(i + 1) % len(self.PALETTE_CYCLE)])
-
-    def apply_palette_runtime(self, palette_name):
-        self._palette_name = palette_name
-        self._palette = get_palette(palette_name)
-        apply_palette(self._palette)
-        buttons_mod.clear_rounded_cache()
-        self._effects.set_theme_colors(list(self._palette['rows'].values()))
-        self._big_bg = [None] + [
-            _make_gradient_surface((self._cell_side, self._cell_side),
-                                   self._palette['rows'][r])
-            for r in range(1, self._size + 1)
-        ]
-        for row in self._cells:
-            for cell in row:
-                if isinstance(cell, list):
-                    for b in cell:
-                        b.bg_color = color_for_value(b.n)
-        for big in self._big_buttons:
-            row_idx = big.user_data or 0
-            if 1 <= row_idx <= self._size:
-                big.bg_image = self._big_bg[row_idx]
-        for group in self._rules_buttons:
-            for sub in group:
-                new_color = color_for_value(sub.value)
-                sub._base_color = new_color
-                if not sub.pressed:
-                    sub.bg_color = new_color
-                else:
-                    sub.change_color()
-        self._timer_color = self._palette['text']
-        self._build_sidebar()
-
     # --------------------------- events ------------------------------
 
     def handle_event(self, event):
@@ -937,12 +1144,13 @@ class GameWindow(object):
             return
 
         self._menu_button.handle_event(event)
-        if not self._tutorial:
+        if self._hint_button is not None and self._hint_button.visible:
             self._hint_button.handle_event(event)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = event.pos
-            if self._menu_button.rect.collidepoint(pos) or (
-                    not self._tutorial
+            if self._menu_button.rect.collidepoint(pos):
+                return
+            if (self._hint_button is not None and self._hint_button.visible
                     and self._hint_button.rect.collidepoint(pos)):
                 return
             for group in self._rules_buttons:
@@ -1026,7 +1234,11 @@ class GameWindow(object):
 
     def _time_scale(self, real_dt):
         """Advance and sample the cascade slow-mo: time crawls the instant a
-        big cascade starts, then eases smoothly back to full speed."""
+        big cascade starts, then eases smoothly back to full speed. Disabled
+        when reduce-motion is on."""
+        if self._reduce_motion:
+            self._slowmo_t = 0.0
+            return 1.0
         if self._slowmo_t <= 0.0:
             return 1.0
         self._slowmo_t = max(0.0, self._slowmo_t - real_dt)
@@ -1060,11 +1272,8 @@ class GameWindow(object):
         self._update_press(dt_ms / 1000.0)
 
         self._menu_button.update(dt, self._mouse_pos)
-        self._hint_button.update(dt, self._mouse_pos)
-        if self._hint_t > 0.0:
-            self._hint_t = max(0.0, self._hint_t - dt)
-            if self._hint_t == 0.0:
-                self._hint_btn = None
+        self._tick_idle_hint(dt)
+        self._update_hint_button(dt)
 
         if self._overlay is not None:
             self._overlay.update(dt, self._mouse_pos)
@@ -1302,8 +1511,11 @@ class GameWindow(object):
         sw, sh = max(1, int(pw * scale)), max(1, int(ph * scale))
         pill = pygame.transform.smoothscale(pill, (sw, sh))
         pill.set_alpha(int(255 * a))
-        cx = SIDEBAR_W // 2
-        surface.blit(pill, (cx - sw // 2, self.MSG_CENTER_Y - sh // 2))
+        # portrait floats the pill just under the top strip; landscape keeps it
+        # in the left panel's mid gap
+        cx = CANVAS_WIDTH // 2 if PORTRAIT else SIDEBAR_W // 2
+        cy = (TOP_H + 28) if PORTRAIT else self.MSG_CENTER_Y
+        surface.blit(pill, (cx - sw // 2, cy - sh // 2))
 
     @staticmethod
     def _wrap_text(text, font, max_w):
@@ -1328,8 +1540,14 @@ class GameWindow(object):
     MSG_CENTER_Y = 372
 
     def _heart_pos(self, i):
-        per = self.HEARTS_PER_ROW
         size, gap = self.HEART_SIZE, self.HEART_GAP
+        if PORTRAIT:
+            # one horizontal row, centred in the strip's left third
+            lcx = (CANVAS_WIDTH // 3) // 2
+            total = self._max_lives * size + (self._max_lives - 1) * gap
+            x0 = lcx - total // 2
+            return x0 + i * (size + gap) + size // 2, 126
+        per = self.HEARTS_PER_ROW
         total = per * size + (per - 1) * gap
         x0 = (SIDEBAR_W - total) // 2
         col, rowi = i % per, i // per
@@ -1347,17 +1565,30 @@ class GameWindow(object):
         """Right-panel backing — mirrors the left panel. Drawn before the rule
         buttons so they sit on top of it."""
         panel = buttons_mod._brighten(self._palette['bg'], 13)
+        muted = buttons_mod._brighten(self._palette['bg'], 64)
+        if PORTRAIT:
+            # bottom clues panel, full width
+            pygame.draw.rect(surface, panel,
+                             (0, RULES_AREA_TOP, CANVAS_WIDTH,
+                              CANVAS_HEIGHT - RULES_AREA_TOP))
+            pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
+                             (0, RULES_AREA_TOP), (CANVAS_WIDTH, RULES_AREA_TOP))
+            draw_text(surface, 'C L U E S', self._font_label, muted,
+                      center=(CANVAS_WIDTH // 2, RULES_AREA_TOP + 16))
+            return
         pygame.draw.rect(surface, panel,
                          (RULES_PANEL_X, 0, RULES_PANEL_W, CANVAS_HEIGHT))
         pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
                          (RULES_PANEL_X, 0), (RULES_PANEL_X, CANVAS_HEIGHT))
         surface.blit(self._rules_strip, (RULES_PANEL_X - 16, 0))
-        muted = buttons_mod._brighten(self._palette['bg'], 64)
         cx = RULES_PANEL_X + RULES_PANEL_W // 2
         draw_text(surface, 'C L U E S', self._font_label, muted,
                   center=(cx, 30))
 
     def _draw_left_panel(self, surface):
+        if PORTRAIT:
+            self._draw_top_strip(surface)
+            return
         panel = buttons_mod._brighten(self._palette['bg'], 13)
         pygame.draw.rect(surface, panel, (0, 0, SIDEBAR_W, CANVAS_HEIGHT))
         pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
@@ -1398,20 +1629,81 @@ class GameWindow(object):
         # good/wrong feedback message
         self._draw_message(surface)
 
-        # in-game hint button
-        self._hint_button.draw(surface)
+        # the HINT button, once offered (idle) or in Zen (always)
+        if self._hint_button is not None and self._hint_button.visible:
+            self._hint_button.draw(surface)
 
-        # footer: difficulty + debug hint
+        # footer: difficulty (the +life keyboard shortcut still works but is
+        # no longer surfaced in the UI)
         pygame.draw.line(surface, buttons_mod._brighten(panel, 22),
-                         (24, CANVAS_HEIGHT - 104),
-                         (SIDEBAR_W - 24, CANVAS_HEIGHT - 104))
+                         (24, CANVAS_HEIGHT - 94),
+                         (SIDEBAR_W - 24, CANVAS_HEIGHT - 94))
         draw_text(surface, 'MODE', self._font_label, muted,
-                  center=(cx, CANVAS_HEIGHT - 82))
+                  center=(cx, CANVAS_HEIGHT - 72))
         draw_text(surface, self._complexity_name(), self._font_menu, text,
-                  center=(cx, CANVAS_HEIGHT - 58))
-        draw_text(surface, 'L = +life', self._ui_fonts['tiny'],
-                  buttons_mod._brighten(self._palette['bg'], 40),
-                  center=(cx, CANVAS_HEIGHT - 28))
+                  center=(cx, CANVAS_HEIGHT - 46))
+
+    def _draw_top_strip(self, surface):
+        """Portrait: a slim horizontal info strip above the board — menu,
+        timer, lives/zen, solved, mode and the hint button."""
+        bg = self._palette['bg']
+        panel = buttons_mod._brighten(bg, 13)
+        pygame.draw.rect(surface, panel, (0, 0, CANVAS_WIDTH, TOP_H))
+        pygame.draw.line(surface, buttons_mod._brighten(panel, 30),
+                         (0, TOP_H - 1), (CANVAS_WIDTH, TOP_H - 1))
+        muted = buttons_mod._brighten(bg, 64)
+        text = self._palette['text']
+        cx = CANVAS_WIDTH // 2
+        self._menu_button.draw(surface)
+        if self._tutorial:
+            self._draw_top_strip_tutorial(surface, muted, text)
+            return
+        # timer, centred between the menu and hint buttons
+        draw_text(surface, 'T I M E', self._font_label, muted, center=(cx, 28))
+        draw_text(surface, self._timer_text, self._font_timer,
+                  self._timer_color, center=(cx, 58))
+        third = CANVAS_WIDTH // 3
+        lcx, rcx = third // 2, CANVAS_WIDTH - third // 2
+        rowy = 94
+        if self._zen:
+            draw_text(surface, 'Z E N', self._font_label, muted,
+                      center=(lcx, rowy))
+            draw_text(surface, 'no game over', self._ui_fonts['small'],
+                      self._palette['accent'], center=(lcx, rowy + 28))
+        else:
+            draw_text(surface, 'L I V E S', self._font_label, muted,
+                      center=(lcx, rowy))
+            self._draw_hearts(surface)
+        self._draw_progress(surface)
+        draw_text(surface, 'MODE', self._font_label, muted, center=(rcx, rowy))
+        draw_text(surface, self._complexity_name(), self._font_menu, text,
+                  center=(rcx, rowy + 26))
+        if self._hint_button is not None and self._hint_button.visible:
+            self._hint_button.draw(surface)
+        self._draw_message(surface)
+
+    def _draw_top_strip_tutorial(self, surface, muted, text):
+        cx = CANVAS_WIDTH // 2
+        draw_text(surface, 'T U T O R I A L', self._font_label, muted,
+                  center=(cx, 28))
+        draw_text(surface, self._tut_block_name, self._font_menu, text,
+                  center=(cx, 58))
+        tracker = self._tut_tracker or []
+        accent = self._palette['accent']
+        n = max(1, len(tracker))
+        gap = 46
+        x0 = cx - (n - 1) * gap // 2
+        y = 108
+        for i, row in enumerate(tracker):
+            done = row[3] if len(row) == 5 else row[2]
+            current = row[4] if len(row) == 5 else row[3]
+            dx = x0 + i * gap
+            if done:
+                pygame.draw.circle(surface, accent, (dx, y), 9)
+            elif current:
+                pygame.draw.circle(surface, accent, (dx, y), 9, 2)
+            else:
+                pygame.draw.circle(surface, muted, (dx, y), 8, 2)
 
     def _draw_tutorial_panel(self, surface, panel, muted, text, cx):
         """Left panel during the tutorial — the 6-block progress tracker and
@@ -1436,11 +1728,26 @@ class GameWindow(object):
     def _draw_progress(self, surface):
         """The 'solved N / 36' indicator filling the left panel's mid gap."""
         muted = buttons_mod._brighten(self._palette['bg'], 64)
+        total = self._size * self._size
+        if PORTRAIT:
+            cx, y, bw = CANVAS_WIDTH // 2, 92, 200
+            draw_text(surface, 'S O L V E D', self._font_label, muted,
+                      center=(cx, y))
+            draw_text(surface, '%d / %d' % (self._defined_cells_count, total),
+                      self._font_menu, self._palette['text'],
+                      center=(cx, y + 24))
+            bx, by = cx - bw // 2, y + 42
+            surface.blit(rounded_fill(bw, 6, buttons_mod._brighten(
+                self._palette['bg'], 26), 3), (bx, by))
+            frac = clamp01(self._defined_cells_count / float(total))
+            if frac > 0:
+                surface.blit(rounded_fill(max(1, int(bw * frac)), 6,
+                                          self._palette['accent'], 3), (bx, by))
+            return
         cx = SIDEBAR_W // 2
         y = self.PROGRESS_Y
         draw_text(surface, 'S O L V E D', self._font_label, muted,
                   center=(cx, y))
-        total = self._size * self._size
         draw_text(surface, '%d / %d' % (self._defined_cells_count, total),
                   self._font_menu, self._palette['text'], center=(cx, y + 26))
         bw = SIDEBAR_W - 80
@@ -1482,8 +1789,8 @@ class GameWindow(object):
         line_h = max(font.get_height(), tile) + 4
         # wide enough that the one-text-segment rules ("same column",
         # "left of") keep their closing cell tile on the first line instead
-        # of orphaning it onto a second row
-        max_w = 300
+        # of orphaning it onto a second row (wider in portrait — bigger font)
+        max_w = 420 if PORTRAIT else 300
 
         # flow words and cell tiles into wrapped lines
         tokens = []
@@ -1527,27 +1834,48 @@ class GameWindow(object):
         # semi-transparent so the cells it highlights stay readable beneath it
         pill.set_alpha(224)
         grect = group[0].rect.union(group[-1].rect)
-        tx = max(8, grect.left - 14 - pw)
-        ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
+        if PORTRAIT:
+            # clues live at the bottom, so float the tooltip ABOVE the group
+            # (over the board) instead of beside it, where it would cover the
+            # neighbouring clues
+            tx = max(8, min(CANVAS_WIDTH - pw - 8, grect.centerx - pw // 2))
+            ty = max(8, grect.top - ph - 12)
+        else:
+            tx = max(8, grect.left - 14 - pw)
+            ty = max(8, min(CANVAS_HEIGHT - ph - 8, grect.centery - ph // 2))
         surface.blit(pill, (tx, ty))
 
     def _draw_hint(self, surface):
-        """A gold pulsing ring on the cell the hint pointed at."""
-        if self._hint_btn is None or self._hint_t <= 0.0:
+        """A red pulsing ring on the candidate the hint points at popping,
+        plus a matching frame around the clue that justifies the move. It stays
+        until the player's next move clears ``_hint_btn``."""
+        if self._hint_btn is None:
             return
+        accent = (240, 96, 96)
         r = self._hint_btn.rect
         p = 0.5 + 0.5 * math.sin(self._clock * 7.0)
         ring = r.inflate(8 + 6 * p, 8 + 6 * p)
-        surface.blit(rounded_border(ring.w, ring.h, (255, 222, 90),
+        surface.blit(rounded_border(ring.w, ring.h, accent,
                                     max(5, ring.h // 3), 3), ring.topleft)
-        img = self._font_label.render('keep this one', True, (28, 24, 22))
-        pw, ph = img.get_width() + 14, img.get_height() + 7
+        label = ('pop this one' if self._hint_group is None
+                 else 'pop this — see the clue')
+        img = self._font_hint.render(label, True, (28, 24, 22))
+        pad_x, pad_y = (12, 8) if PORTRAIT else (7, 4)
+        pw, ph = img.get_width() + pad_x * 2, img.get_height() + pad_y * 2
         pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
-        pill.blit(rounded_fill(pw, ph, (255, 222, 90), ph // 2), (0, 0))
-        pill.blit(img, (7, 3))
+        pill.blit(rounded_fill(pw, ph, accent, ph // 2), (0, 0))
+        pill.blit(img, (pad_x, pad_y))
         px = max(4, min(CANVAS_WIDTH - pw - 4, r.centerx - pw // 2))
         py = max(4, r.top - ph - 10)
         surface.blit(pill, (px, py))
+        # ring the rule group too
+        if (self._hint_group is not None
+                and 0 <= self._hint_group < len(self._rules_buttons)):
+            group = self._rules_buttons[self._hint_group]
+            gr = group[0].rect.union(group[-1].rect).inflate(10 + 4 * p,
+                                                              10 + 4 * p)
+            surface.blit(rounded_border(gr.w, gr.h, accent,
+                                        max(6, gr.h // 3), 3), gr.topleft)
 
     def _draw_armed(self, surface):
         """Touch mode: ring the tapped-once widget and prompt to confirm."""
@@ -1626,24 +1954,265 @@ class GameWindow(object):
                 surface.blit(spr, (cx - self.HEART_SIZE // 2,
                                    cy - self.HEART_SIZE // 2))
 
-    def find_hint_target(self, model):
-        """Pick an unsolved cell and return the FieldButton of its correct
-        candidate — the in-game hint marks that tile."""
-        import random
-        cells = [c for row in self._cells for c in row
-                 if isinstance(c, list) and len(c) > 1]
-        if not cells:
+    # ----------------------- candidate / value helpers -------------------
+
+    def _value_at_cell(self, y, x, n):
+        """Is value `n` still a possibility at board cell (y, x)?"""
+        cell = self._cells[y][x]
+        if cell is None:
+            big = self._big_cells.get((y, x))
+            return big is not None and big.n == n
+        return any(b.n == n for b in cell)
+
+    def _candidate_button(self, y, x, n):
+        """The still-on-board candidate button for value `n` at (y, x), or
+        None if the cell is solved or the value is no longer a candidate."""
+        cell = self._cells[y][x]
+        if not isinstance(cell, list):
             return None
-        cell = random.choice(cells)
-        y, x = cell[0].y, cell[0].x
-        answer = model[y][x]
         for btn in cell:
-            if btn.n == answer:
+            if btn.n == n:
                 return btn
         return None
 
-    def show_hint(self, btn):
-        """Briefly ring a tile as the answer for its cell."""
+    def _value_solved(self, n):
+        return any(b.n == n for b in self._big_buttons)
+
+    def _value_columns(self, n):
+        """Columns where value `n` is still possible in its row."""
+        y = n // 10 - 1
+        if not (0 <= y < self._size):
+            return []
+        return [x for x in range(self._size)
+                if self._value_at_cell(y, x, n)]
+
+    # ----------------------- rule satisfaction --------------------------
+
+    def _rule_satisfied(self, values):
+        """A displayed clue is 'satisfied' once every value it references is
+        in a solved big cell — the constraint is then concrete and the clue
+        cannot teach anything more, so we auto-dim it."""
+        for v in values:
+            if not isinstance(v, int):
+                continue
+            if not self._value_solved(v):
+                return False
+        return True
+
+    def auto_dim_satisfied_rules(self):
+        """Press any clue whose constraint is now satisfied. Called by the
+        presenter after every cell change so the clue panel reflects the
+        current state without the player having to crossed-out clues by
+        hand."""
+        any_change = False
+        for group in self._rules_buttons:
+            if group[0].pressed:
+                continue
+            values = tuple(sub.value for sub in group)
+            if self._rule_satisfied(values):
+                for sub in group:
+                    sub.pressed = True
+                    sub.change_color()
+                any_change = True
+        return any_change
+
+    # ----------------------- hint finder --------------------------------
+
+    def _rule_eliminates(self, group_index, values):
+        """For a clue, find a still-active candidate it forbids.
+
+        Returns ``(hint_btn, group_index)`` or ``None``. The clue stays in
+        the rules-panel highlight (its three sub-buttons) so the player sees
+        *why* the candidate can go."""
+        a, b, c = values
+        # 'A is in the same column as C'
+        if b == '^' and isinstance(a, int) and isinstance(c, int):
+            ya, yc = a // 10 - 1, c // 10 - 1
+            for x in range(self._size):
+                if not self._value_at_cell(ya, x, a):
+                    btn = self._candidate_button(yc, x, c)
+                    if btn is not None:
+                        return btn, group_index
+                if not self._value_at_cell(yc, x, c):
+                    btn = self._candidate_button(ya, x, a)
+                    if btn is not None:
+                        return btn, group_index
+            return None
+        # 'A and C are in neighbouring columns'
+        if b == '<->' and isinstance(a, int) and isinstance(c, int):
+            ya, yc = a // 10 - 1, c // 10 - 1
+            for x in range(self._size):
+                if self._value_at_cell(ya, x, a):
+                    has_neighbour = ((x > 0 and self._value_at_cell(yc, x - 1, c))
+                                     or (x < self._size - 1
+                                         and self._value_at_cell(yc, x + 1, c)))
+                    if not has_neighbour:
+                        btn = self._candidate_button(ya, x, a)
+                        if btn is not None:
+                            return btn, group_index
+                if self._value_at_cell(yc, x, c):
+                    has_neighbour = ((x > 0 and self._value_at_cell(ya, x - 1, a))
+                                     or (x < self._size - 1
+                                         and self._value_at_cell(ya, x + 1, a)))
+                    if not has_neighbour:
+                        btn = self._candidate_button(yc, x, c)
+                        if btn is not None:
+                            return btn, group_index
+            return None
+        # 'A is left of C'
+        if b == '...' and isinstance(a, int) and isinstance(c, int):
+            a_cols = self._value_columns(a)
+            c_cols = self._value_columns(c)
+            if not a_cols or not c_cols:
+                return None
+            min_c = min(c_cols)
+            max_a = max(a_cols)
+            # any A at column >= max-C-allowed cannot satisfy A < C
+            for x in a_cols:
+                if x >= max(c_cols):
+                    btn = self._candidate_button(a // 10 - 1, x, a)
+                    if btn is not None:
+                        return btn, group_index
+            for x in c_cols:
+                if x <= min_c and x <= min(a_cols):
+                    # symmetric: C cannot be at the leftmost possible A
+                    btn = self._candidate_button(c // 10 - 1, x, c)
+                    if btn is not None:
+                        return btn, group_index
+            # at the very least: A cannot be at the rightmost column when C
+            # has no column to its right; C cannot be at the leftmost when A
+            # has no column to its left
+            last = self._size - 1
+            if last in a_cols and last in c_cols and len(c_cols) == 1:
+                btn = self._candidate_button(a // 10 - 1, last, a)
+                if btn is not None:
+                    return btn, group_index
+            if 0 in c_cols and 0 in a_cols and len(a_cols) == 1:
+                btn = self._candidate_button(c // 10 - 1, 0, c)
+                if btn is not None:
+                    return btn, group_index
+            return None
+        # triple [A, B, C] — three consecutive columns, either direction.
+        # The full elimination logic is fiddly, so lean on the known answer:
+        # point at a still-active candidate of one of the three values that
+        # the solution rules out, with this triple clue ringed as the reason.
+        if (isinstance(a, int) and isinstance(b, int) and isinstance(c, int)
+                and self._solution is not None):
+            for v in (a, b, c):
+                y = v // 10 - 1
+                for x in range(self._size):
+                    btn = self._candidate_button(y, x, v)
+                    if btn is not None and self._solution[y][x] != v:
+                        return btn, group_index
+        return None
+
+    def find_hint_target(self, _model=None):
+        """Return a still-active clue and a candidate that the clue forbids
+        (``(field_btn, group_index)``) or None if no rule can fire right now.
+
+        Unlike the old hint (which spoiled the answer of a random cell), this
+        one names the clue the player should be reading — they still have to
+        understand the deduction, the hint just nudges them toward it.
+        """
+        for gi, group in enumerate(self._rules_buttons):
+            if group[0].pressed:                       # already crossed out
+                continue
+            values = tuple(sub.value for sub in group)
+            if self._rule_satisfied(values):
+                continue
+            result = self._rule_eliminates(gi, values)
+            if result is not None:
+                return result
+        # No clue fired a clean elimination (e.g. only triple clues remain, or
+        # the next step needs deeper reasoning). Fall back to the answer grid so
+        # the button always helps: ring any candidate the solution rules out.
+        # Returns (btn, None) — a clue-less "safe pop".
+        return self._solution_hint()
+
+    def _solution_hint(self):
+        """A guaranteed-safe candidate to pop, derived from the known answer.
+        Used when no displayed clue yields a clean elimination."""
+        if self._solution is None:
+            return None
+        for y in range(self._size):
+            for x in range(self._size):
+                cell = self._cells[y][x]
+                if not (isinstance(cell, list) and len(cell) > 1):
+                    continue
+                try:
+                    correct = self._solution[y][x]
+                except (IndexError, TypeError, KeyError):
+                    continue
+                for b in cell:
+                    if b.n != correct:
+                        return b, None
+        return None
+
+    def _on_hint_pressed(self):
+        """The player asked for a hint. Find a deducible candidate and ring it
+        together with its clue; if nothing is deducible right now, say so."""
+        if self._overlay is not None:
+            return
+        self._play('click')
+        target = self.find_hint_target()
+        if target is not None:
+            self.show_hint(target)
+            if self.on_hint:
+                self.on_hint()
+        else:
+            self._result_text = 'no hint right now — keep going!'
+            self._bump_message()
+
+    def show_hint(self, target):
+        """Highlight a candidate to pop together with the clue that justifies
+        it. `target` is a (FieldButton, rule_group_index) tuple as returned
+        by ``find_hint_target``. The highlight persists until the next move."""
+        if target is None:
+            return
+        btn, group_index = target
         self._hint_btn = btn
-        self._hint_t = 4.0
+        self._hint_group = group_index
+        self._idle_t = 0.0
         self._play('spread')
+
+    def _update_hint_button(self, dt):
+        """Show the HINT button when it is on offer (Zen always; Easy/Normal
+        once the idle window has elapsed) and animate it while visible."""
+        if self._hint_button is None:
+            return
+        self._hint_button.visible = (not self._tutorial
+                                     and (self._zen or self._hint_offered))
+        if self._hint_button.visible:
+            self._hint_button.update(dt, self._mouse_pos)
+
+    def set_idle_hint_delay(self, seconds):
+        """The presenter calls this with 20s on Easy, 40s on Normal, or
+        None on Hard (the HINT button is then never offered by idling).
+        Tutorial mode passes None as well."""
+        self._idle_hint_delay = seconds
+        self._idle_t = 0.0
+
+    def reset_idle(self):
+        """Player just made a move — restart the idle clock."""
+        self._idle_t = 0.0
+        # do not clear an already-visible hint; the player may need a moment
+        # to read it after the action that triggered it
+
+    def _tick_idle_hint(self, dt):
+        """Bump the idle clock; once it crosses the difficulty-set threshold,
+        offer the HINT button (it then stays available for the rest of the
+        round). The hint itself is no longer applied automatically — the
+        player decides whether to press the button.
+
+        While an overlay is up, the timer is parked — opening the menu must
+        not count as "thinking". Zen always shows the button, so it skips the
+        idle clock entirely."""
+        if (self._tutorial or self._zen
+                or self._idle_hint_delay is None
+                or self._hint_offered
+                or self._overlay is not None
+                or self._cascade_time < self._cascade_duration):
+            return
+        self._idle_t += dt
+        if self._idle_t >= self._idle_hint_delay:
+            self._hint_offered = True

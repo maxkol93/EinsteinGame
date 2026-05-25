@@ -7,9 +7,11 @@ Two things live here:
   player is on, the global mistake count, the 6-block tracker, and what the
   win plaque should say after each level.
 * the 3x3 puzzle generator — every tutorial level is a tiny 3x3 board. Block 0
-  ("Entry") has no clues and no fixed answer; blocks 1-5 are real solvable
-  puzzles with a controlled rule type, generated and then verified with the
-  game's own ``SelfWalkthrough`` deduction engine.
+  ("Entry") has no clues and no fixed answer; its first three levels teach
+  the tap-to-pop gesture, the next three teach the hold-to-define gesture.
+  Blocks 1-5 are real solvable puzzles with a controlled rule type,
+  generated and then verified with the game's own ``SelfWalkthrough``
+  deduction engine.
 """
 import random
 
@@ -18,7 +20,9 @@ from model.self_walkthrough import SelfWalkthrough
 
 SIZE = 3
 BLOCK_COUNT = 6
-LEVELS_PER_BLOCK = 3
+LEVELS_PER_BLOCK = 6                          # block 0
+LOGIC_LEVELS_PER_BLOCK = 3                    # blocks 1..5
+
 BLOCK_NAMES = ['Entry', 'Same column', 'Neighbors', 'Left of',
                'Three in a row', 'Mixed']
 
@@ -32,8 +36,13 @@ _ALL_MARKERS = ['^', '<->', '...', 'tri']
 # --------------------------------------------------------------------------
 WELCOME_TEXT = (
     "Welcome to Einstein! Every cell holds a few candidate symbols. Pop the "
-    "wrong ones — when a single symbol is left, the cell solves itself. Go "
-    "ahead and try it.")
+    "wrong ones with a quick tap — when a single symbol is left, the cell "
+    "solves itself. Go ahead and try it.")
+
+GESTURE_HOLD_TEXT = (
+    "New gesture — hold the left mouse button on a candidate to instantly "
+    "set the cell to that symbol. A short tap no longer counts in these "
+    "levels: only a hold defines a cell.")
 
 GOAL_HINT = (
     "Keep popping candidates to fill the whole board with solved cells — "
@@ -41,8 +50,9 @@ GOAL_HINT = (
 
 FINAL_TEXT = (
     "Tutorial complete — well done! Every mode and board size is now "
-    "unlocked in the menu. In a real game mistakes cost lives, the timer "
-    "runs and your score is kept. Go set some records!")
+    "available in the menu (you still unlock them one by one by playing). "
+    "In a real game mistakes cost lives, the timer runs and your records "
+    "are kept. Go set some times!")
 
 BLOCK_INTRO = {
     0: WELCOME_TEXT,
@@ -70,6 +80,12 @@ MISTAKE_TEXTS = [
 ]
 
 
+def levels_in_block(block):
+    """Block 0 (the gesture entry) has six levels; the logic blocks have
+    three. ``TutorialDirector.complete_level`` keys off this."""
+    return LEVELS_PER_BLOCK if block == 0 else LOGIC_LEVELS_PER_BLOCK
+
+
 def _block_praise(block):
     name = BLOCK_NAMES[block]
     nxt = BLOCK_NAMES[block + 1] if block + 1 < BLOCK_COUNT else ''
@@ -90,7 +106,8 @@ def _replay_praise(block):
 class TutorialLevel(object):
     """One generated 3x3 round handed to the presenter / view."""
 
-    def __init__(self, block, level, solution, defined_cells, clues):
+    def __init__(self, block, level, solution, defined_cells, clues,
+                 tap_ok=True, hold_ok=True):
         self.size = SIZE
         self.block = block
         self.level = level
@@ -100,6 +117,11 @@ class TutorialLevel(object):
         # block 0 has no fixed answer — any pop is accepted
         self.free = (block == 0)
         self.rule_name = BLOCK_NAMES[block]
+        # which gesture(s) the level accepts. Entry block splits its six
+        # levels into a tap-only half and a hold-only half so each gesture
+        # gets practised in isolation. Logic blocks accept both.
+        self.tap_ok = bool(tap_ok)
+        self.hold_ok = bool(hold_ok)
 
 
 def _random_solution():
@@ -168,9 +190,9 @@ def _clue_is_useful(solution, clue, open_cells):
     return any(c in open_cells for c in _clue_cells(solution, clue))
 
 
-# Per level (0/1/2): how many clues each level carries. The board is laid
-# out (see `_open_cells_in_rows`) so the level always costs exactly
-# `level + 1` clicks to solve — level 0 -> 1 click, level 1 -> 2, level 2 -> 3.
+# Per level of the logic blocks (0/1/2): how many clues each level carries.
+# The board is laid out (see `_open_cells_in_rows`) so the level always costs
+# exactly `level + 1` clicks to solve.
 _CLUE_COUNT = {0: 1, 1: 2, 2: 3}
 
 
@@ -188,13 +210,49 @@ def _open_cells_in_rows(n_rows):
     return cells
 
 
+def _open_cells_count(n_cells):
+    """Pick exactly `n_cells` distinct cells from the 3x3 board.
+
+    Used by the gesture-practice block (block 0): every open cell is solved
+    by either a tap (levels 0-2: free mode, two taps reduce a triple to its
+    last candidate) or a hold (levels 3-5: one hold defines the cell)."""
+    all_cells = [(y, x) for y in range(SIZE) for x in range(SIZE)]
+    random.shuffle(all_cells)
+    return set(all_cells[:n_cells])
+
+
+# Block 0 unsolved-cell counts. Six levels, each twice the practice: tap×3
+# then hold×3. The normal row cascade is on, so popping/defining one cell can
+# satisfy others — that chain reaction is exactly what the entry block shows.
+_BLOCK0_CELLS = [4, 6, 8, 4, 6, 8]
+
+
 def _generate_entry(level):
+    """Build one of block 0's six gesture-practice levels.
+
+    Levels 0-2 are tap-only; levels 3-5 are hold-only. The number of unsolved
+    cells grows 4-6-8 within each half so each gesture is rehearsed a few
+    times before the next block."""
+    cell_count = _BLOCK0_CELLS[level]
     solution = _random_solution()
-    open_cells = _open_cells_in_rows(level + 1)
+    if level < 3:
+        # tap half — the cascade-friendly "2 per row" layout while it fits;
+        # for 8 cells we spill into the third per-row column
+        if cell_count == 4:
+            open_cells = _open_cells_in_rows(2)
+        elif cell_count == 6:
+            open_cells = _open_cells_in_rows(3)
+        else:                                      # 8
+            open_cells = _open_cells_count(cell_count)
+        tap_ok, hold_ok = True, False
+    else:
+        # hold half — every open cell becomes one "define" gesture
+        open_cells = _open_cells_count(cell_count)
+        tap_ok, hold_ok = False, True
     given = [(y, x) for y in range(SIZE) for x in range(SIZE)
              if (y, x) not in open_cells]
     return TutorialLevel(0, level, solution, _define_rules(solution, given),
-                         [])
+                         [], tap_ok=tap_ok, hold_ok=hold_ok)
 
 
 def _markers_for(block, count):
@@ -302,6 +360,7 @@ class TutorialDirector(object):
         self.level_had_mistake = False
         self._reminder = 0               # cycles the win-plaque reminder text
         self._intro_shown = set()        # blocks whose intro popup was seen
+        self._gesture_shown = False      # the "now hold to define" popup
 
     # ------------------------------------------------------------------
     @property
@@ -326,6 +385,14 @@ class TutorialDirector(object):
         self._intro_shown.add(self.block)
         return BLOCK_INTRO.get(self.block)
 
+    def gesture_intro(self):
+        """The "switch to hold" popup shown once, when entering level 3 of
+        block 0. Returns None at any other moment."""
+        if self.block != 0 or self.level != 3 or self._gesture_shown:
+            return None
+        self._gesture_shown = True
+        return GESTURE_HOLD_TEXT
+
     # ------------------------------------------------------------------
     def start_replay(self, block):
         """Jump into a chosen block to practise it again (post-tutorial)."""
@@ -334,6 +401,8 @@ class TutorialDirector(object):
         self.level = 0
         self.level_had_mistake = False
         self._intro_shown.discard(self.block)
+        if self.block == 0:
+            self._gesture_shown = False
 
     def restart_all(self):
         """Wipe progress and run the whole onboarding from block 0."""
@@ -344,6 +413,7 @@ class TutorialDirector(object):
         self.level_had_mistake = False
         self.replay = False
         self._intro_shown.clear()
+        self._gesture_shown = False
 
     def skip_all(self):
         """Mark the whole onboarding done — unlocks every game mode."""
@@ -391,7 +461,7 @@ class TutorialDirector(object):
             result['goal_hint'] = True
 
         self.level += 1
-        if self.level < LEVELS_PER_BLOCK:
+        if self.level < levels_in_block(was_block):
             return result
 
         # the block is finished
@@ -418,23 +488,18 @@ class TutorialDirector(object):
     # ------------------------------------------------------------------
     def tracker(self):
         """The 6-block progress rows for the side panel and win plaque:
-        a list of (name, cleared_levels, done, is_current).
-
-        A fully-cleared block reads as `done` (struck through, 3/3) — unless
-        it is the block being played right now, first run or replay alike,
-        which instead shows live progress and the current-row highlight. Once
-        the whole tutorial is finished there is no current block, so every
-        row settles to a struck-through 3/3."""
+        a list of (name, cleared_levels, total_levels, done, is_current)."""
         playing = not (self.all_done and not self.replay)
         rows = []
         for i in range(BLOCK_COUNT):
+            total = levels_in_block(i)
             is_current = (i == self.block) and playing
             cleared_block = i < self.blocks_done or i < self.block
             if is_current:
-                cleared, done = min(LEVELS_PER_BLOCK, self.level), False
+                cleared, done = min(total, self.level), False
             elif cleared_block:
-                cleared, done = LEVELS_PER_BLOCK, True
+                cleared, done = total, True
             else:
                 cleared, done = 0, False
-            rows.append((BLOCK_NAMES[i], cleared, done, is_current))
+            rows.append((BLOCK_NAMES[i], cleared, total, done, is_current))
         return rows

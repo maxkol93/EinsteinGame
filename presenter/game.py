@@ -11,11 +11,11 @@ from view.palettes import get_palette
 from view.clipboard import copy_to_clipboard
 from model.field_and_rules import FieldAndRules
 from model.timer import Timer
-from model.stats import Stats, score_and_stars, par_time
+from model.stats import Stats, par_time
 from model.settings import Settings, TUTORIAL_BLOCKS
 from model.tutorial import TutorialDirector, GOAL_HINT
 from model import achievements
-from model.daily import daily_config
+from model.daily import daily_config, weekly_config, monthly_config
 
 
 # screen states
@@ -32,19 +32,27 @@ DEFAULT_LIVES = 3
 # 'wrong' sound with them), short enough not to feel like a lockout.
 WRONG_COOLDOWN = 0.35
 
+# How long the player can sit idle before the game offers a hint. Hard mode
+# never auto-shows one.
+_IDLE_HINT_BY_DIFF = {0: 20.0, 1: 40.0, 2: None}
+
 _DIFF_KEY = {0: 'easy', 1: 'normal', 2: 'hard'}
 
 # Pre-defined start-cell count per (board size, difficulty index). Easy hands
-# the player a big head start; Hard reveals nothing.
+# the player a big head start; Hard reveals nothing. 3×3 was retired.
 _COMPLEXITY = {
-    3: (4, 2, 0),
     4: (9, 4, 0),
     5: (14, 7, 0),
     6: (20, 10, 0),
 }
 
-_SIZE_LABEL = {3: 'Quick 3×3', 4: '4×4', 5: '5×5', 6: '6×6'}
+_SIZE_LABEL = {4: '4×4', 5: '5×5', 6: '6×6'}
 _DIFF_LABEL = {0: 'Easy', 1: 'Normal', 2: 'Hard'}
+
+_SIZES = (4, 5, 6)
+
+# Need this many wins in a (difficulty, size) slot to unlock the next slot.
+_UNLOCK_THRESHOLD = 3
 
 # titles shown on the tutorial win plaque, keyed by complete_level() outcome
 _TUT_TITLE = {
@@ -61,8 +69,7 @@ _FONTS_DIR = os.path.join(
 
 
 class Game(object):
-    def __init__(self, palette_name='mocha'):
-        self._palette_name = palette_name
+    def __init__(self):
         self._model = None
         self._view = None
         self._timer = None
@@ -79,9 +86,9 @@ class Game(object):
         self._level = None           # the current TutorialLevel
         # selected mode (menu) vs. the mode the live board was built with
         self._difficulty = 0
-        self._size = 6
+        self._size = 4
         self._active_difficulty = 0
-        self._active_size = 6
+        self._active_size = 4
         try:
             self._max_lives = max(1, int(os.environ.get('EINSTEIN_LIVES',
                                                         DEFAULT_LIVES)))
@@ -94,10 +101,12 @@ class Game(object):
 
         # board reproducibility + run flavour
         self._board_seed = None
-        self._is_daily = False
-        self._daily_cfg = None
+        self._seeded_kind = None     # 'daily' / 'weekly' / 'monthly' / None
+        self._seeded_cfg = None
         self._zen = False
-        self._last_result = None     # the win/lose summary for the share line
+        self._is_retry = False       # current board was reached via Retry —
+                                     # records and achievements are skipped
+        self._last_result = None     # win summary for the share line
 
         self._pending_round = None   # kwargs for the next _init_round, or None
         self._pending = None         # a deferred action run on the next frame
@@ -115,8 +124,7 @@ class Game(object):
         self._stats = Stats()
         self._settings = Settings()
         self._apply_settings()
-        self._loading = LoadingScreen(_FONTS_DIR,
-                                      get_palette(self._palette_name))
+        self._loading = LoadingScreen(_FONTS_DIR, get_palette())
 
         clock = pygame.time.Clock()
         while self._running:
@@ -147,25 +155,27 @@ class Game(object):
         s = self._settings
         if s is None:
             return
-        self._palette_name = s.get('palette')
         self._difficulty = s.get('difficulty')
         self._size = s.get('size')
         self._zen = bool(s.get('zen'))
         if self._sounds is not None:
             self._sounds.set_volume(s.get('volume'))
+            self._sounds.set_music_volume(s.get('music'))
 
     # ------------------------- round lifecycle ------------------------
 
     def _enter_game(self):
         """First entry after the loading splash: straight into the tutorial
         if it is not finished, otherwise the normal menu."""
+        if self._sounds is not None:
+            self._sounds.start_music()
         blocks = (self._settings.get('tutorial_blocks')
                   if self._settings is not None else TUTORIAL_BLOCKS)
         self._tutorial = TutorialDirector(blocks)
         if self._tutorial.all_done:
             self._mode = 'normal'
             self._init_round()
-            self._view.open_menu(daily=self._daily_status())
+            self._view.open_menu(**self._menu_kwargs())
             self._state = MENU
         else:
             self._mode = 'tutorial'
@@ -181,57 +191,81 @@ class Game(object):
         v.on_restart = self._on_restart
         v.on_retry = self._on_retry
         v.on_daily = self._on_daily
+        v.on_weekly = self._on_weekly
+        v.on_monthly = self._on_monthly
         v.on_achievements = self._on_achievements
         v.on_share = self._on_share
         v.on_mode_select = self._on_mode_select
         v.on_size_select = self._on_size_select
         v.on_open_menu = self._on_open_menu
         v.on_volume = self._on_volume
+        v.on_music = self._on_music
+        v.on_reduce_motion = self._on_reduce_motion
         v.on_tooltips = self._on_tooltips
         v.on_touch = self._on_touch
         v.on_zen = self._on_zen
-        v.on_theme = self._on_theme
         v.on_hint = self._on_hint
         v.on_block_replay = self._on_block_replay
 
-    def _init_round(self, seed=None, daily=None):
+    def _init_round(self, seed=None, seeded=None, retry=False):
         """Build a normal game board.
 
-        `seed` reproduces an exact board (used by Retry); `daily` is a
-        Daily-Puzzle config dict that fixes size, difficulty and seed."""
+        ``seed`` reproduces an exact board (used by Retry / Daily etc.).
+        ``seeded`` is a daily/weekly/monthly config dict that pins size,
+        difficulty and seed. ``retry`` flags the run as "do not record" —
+        a Retry play of an already-counted board must not double-count."""
         self._mode = 'normal'
-        self._daily_cfg = daily
-        self._is_daily = daily is not None
-        if daily is not None:
-            self._active_difficulty = daily['difficulty']
-            self._active_size = daily['size']
-            seed = daily['seed']
+        self._is_retry = bool(retry)
+        self._seeded_cfg = seeded
+        self._seeded_kind = seeded['kind'] if seeded is not None else None
+        if seeded is not None:
+            self._active_difficulty = seeded['difficulty']
+            self._active_size = seeded['size']
+            seed = seeded['seed']
         else:
             self._active_difficulty = self._difficulty
             self._active_size = self._size
         if seed is None:
             seed = random.randrange(1, 2 ** 31)
-        self._board_seed = seed
-        # the Daily Puzzle is a fixed challenge — Zen never applies to it
+        # Zen never applies to a seeded puzzle (those are timed records)
         self._zen = bool(self._settings.get('zen')) if (
-            self._settings is not None and not self._is_daily) else False
+            self._settings is not None and self._seeded_kind is None) else False
         self._lives = self._max_lives
         self._mistakes = 0
         self._hints = 0
         complexity = _COMPLEXITY[self._active_size][self._active_difficulty]
-        self._model = FieldAndRules(complexity, size=self._active_size,
-                                    seed=seed)
+        # If the generator's safety caps trip on a pathological seed, try a
+        # fresh one. We try up to ten times; after that something is wrong
+        # at the configuration level and we let the error escape.
+        for attempt in range(10):
+            try:
+                self._model = FieldAndRules(complexity,
+                                            size=self._active_size,
+                                            seed=seed)
+                break
+            except RuntimeError:
+                if seeded is not None:
+                    # the seeded puzzle is meant to be reproducible — we
+                    # cannot re-seed without diverging from other players.
+                    # Fall back to the same seed plus a sentinel offset so
+                    # the game at least starts; the player sees a generic
+                    # board for that period this session.
+                    seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+                else:
+                    seed = random.randrange(1, 2 ** 31)
+        self._board_seed = seed
         displayable_rules = self._model.rules[
             self._model.defined_start_cells_count:]
         self._view = GameWindow(displayable_rules,
-                                palette_name=self._palette_name,
                                 sounds=self._sounds,
                                 difficulty=self._active_difficulty,
                                 size=self._active_size, zen=self._zen)
+        # the answer grid keeps the cascade from ever blanking a cell
+        self._view.set_solution(self._model.field)
         self._view.define_start_cells(self._model.defined_start_cells)
         self._view.set_lives(self._max_lives)
-        # the menu selectors mirror the player's saved choice; the MODE
-        # footer names whatever this particular board actually is
+        # menu selectors mirror the saved choice; MODE footer names the
+        # actual live board
         self._view.set_difficulty(self._difficulty)
         self._view.set_sel_size(self._size)
         self._view.set_mode_label(self._mode_label())
@@ -241,6 +275,12 @@ class Game(object):
         if self._settings is not None:
             self._view.set_tooltips(self._settings.get('tooltips'))
             self._view.set_touch(self._settings.get('touch'))
+            self._view.set_reduce_motion(self._settings.get('reduce_motion'))
+        # idle-hint behaviour follows difficulty (Zen and Retry still honour
+        # the difficulty's hint window — Zen is a relax run, not a tutorial)
+        self._view.set_idle_hint_delay(
+            _IDLE_HINT_BY_DIFF.get(self._active_difficulty))
+        self._view.auto_dim_satisfied_rules()
         self._timer = Timer(self._view.timer_update, self._on_game_over)
         self._timer.start()
         self._play('start')
@@ -253,9 +293,15 @@ class Game(object):
         self._level = self._tutorial.current_level()
         self._active_size = self._level.size
         self._view = GameWindow(list(self._level.clues),
-                                palette_name=self._palette_name,
                                 sounds=self._sounds, size=self._level.size,
                                 tutorial=True)
+        # The row cascade is on everywhere, including the free entry block —
+        # the chain reaction is the whole point of the game and the entry
+        # block should show it. Block 0 has no canonical answer (free pops);
+        # the logic blocks pass their solution so the cascade can't misfire.
+        self._view.set_row_cascade(True)
+        self._view.set_solution(None if self._level.free
+                                else self._level.solution)
         self._view.define_start_cells(self._level.defined_cells)
         self._wire_hooks()
         self._view.set_tutorial_progress(self._tutorial.tracker(),
@@ -263,6 +309,9 @@ class Game(object):
         if self._settings is not None:
             self._view.set_tooltips(self._settings.get('tooltips'))
             self._view.set_touch(self._settings.get('touch'))
+            self._view.set_reduce_motion(self._settings.get('reduce_motion'))
+        # never auto-show hints during the tutorial
+        self._view.set_idle_hint_delay(None)
         self._state = PLAYING
         self._play('start')
         intro = self._tutorial.intro_text()
@@ -270,8 +319,20 @@ class Game(object):
             spot = (self._view.clues_rect()
                     if self._tutorial.block == 1 else None)
             label = "Let's play!" if self._tutorial.block == 0 else 'Got it'
+            extras = {}
+            # block 0: looped cursor animation on the welcome popup
+            if self._tutorial.block == 0:
+                extras['animation'] = 'pop_to_solve'
             self._view.show_popup(intro, button_label=label, tag='TUTORIAL',
-                                  spotlight=spot)
+                                  spotlight=spot, **extras)
+        else:
+            # block 0 special-case: before level 4 the tutorial shows a
+            # message about the new hold-to-define gesture
+            note = self._tutorial.gesture_intro()
+            if note is not None:
+                self._view.show_popup(
+                    note, button_label='Got it', tag='TIP',
+                    animation='hold_to_define')
 
     def _update(self, dt):
         if self._pending is not None:
@@ -303,6 +364,9 @@ class Game(object):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self._toggle_menu()
+                return
+            if event.key == pygame.K_u:
+                self._debug_unlock_all()
                 return
             if self._mode == 'normal' and event.key in (
                     pygame.K_l, pygame.K_PLUS, pygame.K_EQUALS,
@@ -339,22 +403,69 @@ class Game(object):
         else:
             if self._stats is not None and self._view is not None:
                 self._view.set_stats(self._stats.summary())
-            self._view.open_menu(finished=was_finished,
-                                 daily=self._daily_status())
+            self._view.open_menu(finished=was_finished, **self._menu_kwargs())
 
-    def _daily_status(self):
-        """The Daily-Puzzle state the menu shows on its Daily button."""
-        cfg = daily_config()
-        daily = self._stats.daily() if self._stats is not None else {}
+    # ----------------------- menu state --------------------------------
+
+    def _menu_kwargs(self):
+        return {
+            'daily': self._seeded_status('daily'),
+            'weekly': self._seeded_status('weekly'),
+            'monthly': self._seeded_status('monthly'),
+            'size_locks': self._size_locks(),
+            'diff_locks': self._diff_locks(),
+        }
+
+    def _seeded_status(self, kind):
+        cfg = {'daily': daily_config, 'weekly': weekly_config,
+               'monthly': monthly_config}[kind]()
+        block = (self._stats.summary().get(kind)
+                 if self._stats is not None else {}) or {}
         return {'number': cfg['number'],
-                'done': daily.get('last') == cfg['day'],
-                'streak': daily.get('streak', 0)}
+                'done': block.get('last') == cfg['day'],
+                'streak': block.get('streak', 0)}
+
+    def _all_unlocked(self):
+        return bool(self._settings is not None
+                    and self._settings.get('unlock_all'))
+
+    def _wins(self, diff, size):
+        return (self._stats.wins_for(diff, size)
+                if self._stats is not None else 0)
+
+    def _size_unlocked(self, diff, size):
+        if self._all_unlocked():
+            return True
+        if size == 4:
+            return True
+        # must have beaten the previous size on the same difficulty
+        prev = {5: 4, 6: 5}[size]
+        return self._wins(diff, prev) >= _UNLOCK_THRESHOLD
+
+    def _diff_unlocked(self, diff):
+        if self._all_unlocked() or diff == 0:
+            return True
+        # every size of the previous difficulty must be cleared
+        prev = diff - 1
+        return all(self._wins(prev, s) >= _UNLOCK_THRESHOLD for s in _SIZES)
+
+    def _size_locks(self):
+        """Per-size lock flags shown by the menu, against the player's
+        currently-selected difficulty."""
+        return [not self._size_unlocked(self._difficulty, s) for s in _SIZES]
+
+    def _diff_locks(self):
+        return [not self._diff_unlocked(d) for d in range(3)]
 
     def _debug_add_life(self):
         self._max_lives += 1
         self._lives += 1
         if self._view is not None:
             self._view.add_life()
+
+    def _debug_unlock_all(self):
+        if self._settings is not None:
+            self._settings.set('unlock_all', True)
 
     # --------------------------- callbacks ----------------------------
 
@@ -371,6 +482,7 @@ class Game(object):
         else:
             self._view.set_massage('good')
             self._view.remove_button(btn)
+            self._view.auto_dim_satisfied_rules()
             if self._view.defined_cells_count == self._active_size ** 2:
                 self._finish_round(won=True)
 
@@ -402,6 +514,7 @@ class Game(object):
         if self._model[btn.y][btn.x] == btn.n:
             self._view.set_massage('good')
             self._view.define_cell(btn)
+            self._view.auto_dim_satisfied_rules()
             if self._view.defined_cells_count == self._active_size ** 2:
                 self._finish_round(won=True)
         else:
@@ -413,53 +526,64 @@ class Game(object):
         if self._state == PLAYING:
             self._view.disable_rule_buttons(btn, btn.index)
 
-    def _on_hint(self):
-        if self._state != PLAYING or self._model is None:
-            return
-        btn = self._view.find_hint_target(self._model)
-        if btn is not None:
-            self._hints += 1
-            self._view.show_hint(btn)
-
     def _finish_round(self, won):
         self._timer.stop_timer()  # fires _on_game_over -> disables the board
         seconds = self._timer.value
+        # Wins are recorded only when the run "counts": not Zen, not a Retry,
+        # and not a tutorial replay. Achievements, the win streak and the
+        # seeded-puzzle counters all key off the same flag.
+        records_count = not (self._zen or self._is_retry)
         if won:
             self._state = WIN
-            score, stars = score_and_stars(self._active_size,
-                                           self._active_difficulty, seconds,
-                                           self._mistakes, self._hints)
-            best_score = score
+            previous_best = None
+            new_record = False
             badges = []
-            if self._stats is not None:
-                self._stats.record_win(self._active_difficulty, seconds,
-                                       score, stars,
-                                       count_streak=not self._zen)
-                if self._is_daily and self._daily_cfg is not None:
-                    self._stats.record_daily(self._daily_cfg['day'])
-                key = _DIFF_KEY.get(self._active_difficulty, 'easy')
-                best_score = self._stats.summary().get(key, {}).get(
-                    'best_score', score)
-                badges = self._grant_achievements(won=True, seconds=seconds,
-                                                  stars=stars)
-            self._last_result = {'seconds': seconds, 'stars': stars,
-                                 'score': score}
+            if records_count and self._stats is not None:
+                previous_best = self._stats.record_win(
+                    self._active_difficulty, self._active_size,
+                    seconds, count_streak=True)
+                if self._seeded_kind is not None and self._seeded_cfg:
+                    self._stats.record_seeded(self._seeded_kind,
+                                              self._seeded_cfg['day'],
+                                              seconds)
+                badges = self._grant_achievements(won=True, seconds=seconds)
+                new_record = (previous_best is None
+                              or seconds < previous_best)
+            best_text = None
+            if records_count and self._stats is not None:
+                if self._seeded_kind is not None:
+                    summary = self._stats.summary().get(self._seeded_kind,
+                                                          {})
+                    bt = summary.get('best_time')
+                    if bt:
+                        best_text = self._fmt_seconds(bt)
+                else:
+                    bt = self._stats.best_for(self._active_difficulty,
+                                               self._active_size)
+                    if bt:
+                        best_text = self._fmt_seconds(bt)
+            self._last_result = {'seconds': seconds}
             self._view.set_timer_mood(True)
             self._view.set_stats(self._stats.summary() if self._stats else {})
-            self._view.show_win(stars=stars, score=score,
-                                best_score=best_score, badges=badges,
-                                daily=self._daily_label())
+            self._view.show_win(best_text=best_text, new_record=new_record,
+                                badges=badges, daily=self._daily_label())
             self._play('win')
         else:
             self._state = LOSE
-            if self._stats is not None:
-                self._stats.record_loss(self._active_difficulty)
+            if records_count and self._stats is not None:
+                self._stats.record_loss(self._active_difficulty,
+                                         self._active_size)
             self._last_result = None
             self._view.set_timer_mood(False)
             self._view.show_lose()
             self._play('lose')
 
-    def _grant_achievements(self, won, seconds=0, stars=0):
+    @staticmethod
+    def _fmt_seconds(seconds):
+        s = max(0, int(seconds))
+        return '%02d:%02d' % (s // 60, s % 60)
+
+    def _grant_achievements(self, won, seconds=0):
         """Evaluate and persist achievements; return the freshly-earned names
         for the win plaque to celebrate."""
         if self._stats is None:
@@ -469,7 +593,6 @@ class Game(object):
             'total_wins': self._stats.total_wins,
             'mistakes': self._mistakes,
             'hints': self._hints,
-            'stars': stars,
             'seconds': seconds,
             'par': par_time(self._active_size, self._active_difficulty),
             'size': self._active_size,
@@ -483,15 +606,16 @@ class Game(object):
         return [achievements.info(i)[0] for i in fresh]
 
     def _daily_label(self):
-        if self._is_daily and self._daily_cfg is not None:
-            return 'Daily #%d' % self._daily_cfg['number']
-        return None
+        if self._seeded_cfg is None:
+            return None
+        return '%s #%d' % (self._seeded_kind.title(), self._seeded_cfg['number'])
 
     def _mode_label(self):
         """The left-panel MODE footer for the live board."""
         sz = '%d×%d' % (self._active_size, self._active_size)
-        if self._is_daily and self._daily_cfg is not None:
-            return 'DAILY #%d  ·  %s' % (self._daily_cfg['number'], sz)
+        if self._seeded_cfg is not None:
+            return '%s #%d  ·  %s' % (self._seeded_kind.upper(),
+                                       self._seeded_cfg['number'], sz)
         if self._zen:
             return 'ZEN  ·  %s' % sz
         return '%s  ·  %s' % (
@@ -504,17 +628,24 @@ class Game(object):
         self._state = PLAYING
 
     def _on_restart(self):
-        """Deal a fresh board (a new random seed; leaves Daily mode)."""
+        """Deal a fresh board (a new random seed; leaves any seeded mode)."""
         self._pending_round = {}
 
     def _on_retry(self):
-        """Replay the exact same board — same seed, same Daily config."""
+        """Replay the exact same board — same seed. The run no longer
+        counts for records/achievements."""
         self._pending_round = {'seed': self._board_seed,
-                               'daily': self._daily_cfg}
+                               'seeded': self._seeded_cfg,
+                               'retry': True}
 
     def _on_daily(self):
-        """Start (or replay) today's Daily Puzzle."""
-        self._pending_round = {'daily': daily_config()}
+        self._pending_round = {'seeded': daily_config()}
+
+    def _on_weekly(self):
+        self._pending_round = {'seeded': weekly_config()}
+
+    def _on_monthly(self):
+        self._pending_round = {'seeded': monthly_config()}
 
     def _on_achievements(self):
         if self._view is not None and self._stats is not None:
@@ -525,6 +656,10 @@ class Game(object):
         self._zen = bool(enabled)
         if self._settings is not None:
             self._settings.set('zen', bool(enabled))
+
+    def _on_hint(self):
+        """The player pressed the HINT button — count it for stats."""
+        self._hints += 1
 
     def _on_share(self):
         """Copy a spoiler-free result line to the clipboard."""
@@ -537,14 +672,11 @@ class Game(object):
                or '%s %s' % (board, _DIFF_LABEL.get(self._active_difficulty,
                                                     '')))
         mins, secs = r['seconds'] // 60, r['seconds'] % 60
-        stars = '★' * r['stars'] + '☆' * (3 - r['stars'])
-        text = 'Einstein — %s\n%s  %d:%02d  ·  %d pts' % (
-            tag.strip(), stars, mins, secs, r['score'])
+        text = 'Einstein — %s\n%d:%02d' % (tag.strip(), mins, secs)
         copy_to_clipboard(text)
 
     def _on_mode_select(self, difficulty):
-        # Only switch the selected difficulty — the new field is generated on
-        # the next Restart.
+        # the new field is generated on the next Restart
         self._difficulty = difficulty
         if self._view is not None:
             self._view.set_difficulty(difficulty)
@@ -552,7 +684,7 @@ class Game(object):
             self._settings.set('difficulty', difficulty)
 
     def _on_size_select(self, size):
-        # Likewise: the board only changes geometry on the next Restart.
+        # likewise: the board only changes geometry on the next Restart
         self._size = size
         if self._view is not None:
             self._view.set_sel_size(size)
@@ -568,6 +700,14 @@ class Game(object):
         if self._settings is not None:
             self._settings.set('volume', float(value))
 
+    def _on_music(self, value):
+        if self._settings is not None:
+            self._settings.set('music', float(value))
+
+    def _on_reduce_motion(self, enabled):
+        if self._settings is not None:
+            self._settings.set('reduce_motion', bool(enabled))
+
     def _on_tooltips(self, enabled):
         if self._settings is not None:
             self._settings.set('tooltips', bool(enabled))
@@ -576,17 +716,20 @@ class Game(object):
         if self._settings is not None:
             self._settings.set('touch', bool(enabled))
 
-    def _on_theme(self, palette_name):
-        self._palette_name = palette_name
-        if self._settings is not None:
-            self._settings.set('palette', palette_name)
-
     # --------------------------- tutorial -----------------------------
 
     def _tutorial_field_click(self, btn):
         """A board click during the onboarding — never costs a life, but in
-        a logic block a wrong removal resets the block."""
+        a logic block a wrong removal resets the block. Block 0 splits in
+        two: levels 0-2 must be tap-only (a hold is ignored), 3-5 must be
+        hold-only (a tap is ignored)."""
         level = self._level
+        if (level.block == 0 and not level.tap_ok):
+            # block 0, levels 3-5: a normal click no longer pops the cell
+            # — the player must hold to define it instead. Treat the tap
+            # as a teaching no-op (small wrong-feedback + tip popup).
+            self._tutorial_misuse(btn, hold_required=True)
+            return
         if not level.free and level.solution[btn.y][btn.x] == btn.n:
             self._tutorial_mistake(btn)       # removed the correct candidate
             return
@@ -597,12 +740,23 @@ class Game(object):
     def _tutorial_field_define(self, btn):
         """A long-press 'define' during the onboarding."""
         level = self._level
+        if level.block == 0 and not level.hold_ok:
+            # block 0 levels 0-2: hold has not been taught yet
+            self._tutorial_misuse(btn, hold_required=False)
+            return
         if not level.free and level.solution[btn.y][btn.x] != btn.n:
             self._tutorial_mistake(btn)       # asserted the wrong candidate
             return
         self._view.define_cell(btn)
         if self._view.defined_cells_count == self._active_size ** 2:
             self._finish_tutorial_level()
+
+    def _tutorial_misuse(self, btn, hold_required):
+        # Block 0 disables the gesture it is not practising — a hold on the
+        # tap levels, a tap on the hold levels. The unwanted gesture is simply
+        # ignored (a quick nudge, no popup, no penalty) so it never interrupts
+        # the player with a teaching modal.
+        self._view.wrong_feedback(btn)
 
     def _tutorial_mistake(self, btn):
         self._view.wrong_feedback(btn)
@@ -636,7 +790,7 @@ class Game(object):
                 self._stats.unlock(['tutorial'])
             self._mode = 'normal'
             self._init_round()
-            self._view.open_menu(daily=self._daily_status())
+            self._view.open_menu(**self._menu_kwargs())
             self._state = MENU
         else:
             self._init_tutorial_round()
@@ -660,7 +814,7 @@ class Game(object):
     def _enter_normal_after_skip(self):
         self._mode = 'normal'
         self._init_round()
-        self._view.open_menu(daily=self._daily_status())
+        self._view.open_menu(**self._menu_kwargs())
         self._state = MENU
 
     def _on_block_replay(self, block_index):

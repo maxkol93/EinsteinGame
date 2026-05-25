@@ -1,5 +1,4 @@
 import asyncio
-import os
 
 import pygame
 
@@ -24,8 +23,7 @@ async def main():
     pygame.display.set_caption('Einstein game')
     pygame.display.set_mode((CANVAS_WIDTH, CANVAS_HEIGHT))
 
-    palette = os.environ.get('PALETTE', 'mocha')
-    game = Game(palette_name=palette)
+    game = Game()
     try:
         await game.run()
     finally:

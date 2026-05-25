@@ -105,7 +105,9 @@ class SelfWalkthrough(object):
         if len(defined_cells) == 2:
             self._define_other(defined_cells, rule)
         # если определена одна крайняя - определяем остальные
-        if len(defined_cells) == 1 and 0 in defined_cells or 2 in defined_cells:
+        # (без скобок `and` связывал сильнее `or`, и ветка срабатывала для
+        #  len==2 с индексом 2 — а нужно именно «ровно одна, и она крайняя»)
+        if len(defined_cells) == 1 and (0 in defined_cells or 2 in defined_cells):
             if list(defined_cells.values())[0] <= 1 or list(defined_cells.values())[0] >= (self._size - 2):
                 self._define_other(defined_cells, rule)
         else:

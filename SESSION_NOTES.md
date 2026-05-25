@@ -1,64 +1,223 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-05-19**.
+Quick context for resuming work. Latest session: **2026-05-24**.
 
-## Done — 2026-05-19
+## Done — 2026-05-24 (mobile tweaks)
 
-Two commits on branch `claude/work`.
+- **Portrait only on actual phones.** `view/window.py` now picks orientation by
+  viewport (`platform.window.innerHeight > innerWidth`) — desktop browsers and
+  the desktop app stay landscape; only a taller-than-wide phone goes portrait.
+  `build_web.sh` reports the landscape fb (build machine) and injects a small JS
+  observer that keeps `--ar`/`--ari` synced to the live `#canvas` backing, so
+  whichever framebuffer the game creates contain-fits without blur.
+- **Entry-tutorial cascade restored.** Block 0 runs the normal row cascade
+  again (the earlier no-cascade tuning is gone); `_BLOCK0_CELLS`/`_generate_entry`
+  reverted, presenter sets `set_row_cascade(True)`. Verified 360 plays solve
+  fully with no blank cell.
+- **Portrait hints/tooltips legibility.** Hint pill uses a 20 px font; the clue
+  tooltip is bigger (22 px) and floats **above** the clue group (over the board)
+  instead of beside it, so it never covers neighbouring clues.
+- **Web audio lag mitigation** (pygame mixer stutters on emscripten): dropped
+  the per-`hover` tick, cut channels 16→8, removed the per-trigger `snd.stop()`,
+  and the cascade now plays **one pick per resolved cell** (row-strike shimmer
+  pops are silent) instead of a pick per struck candidate. Music/SFX otherwise
+  unchanged. (If still laggy, next step is moving the loop to an HTML5 `<audio>`
+  element off the mixer.)
 
-### Commit `354fa00` — bug fixes + cascade/feel rework
-A 12-item list:
-- Tutorial levels now cost exactly **1 / 2 / 3 clicks** per level
-  (`_open_cells_in_rows` lays out N two-open-cell rows).
-- A clue whose cells are all pre-revealed can no longer appear (it was
-  "already satisfied"); every clue points at an unsolved cell.
-- Completed tutorial showed the last block `0/3` → `tracker()` rewritten;
-  a replayed block is un-struck and shows live progress, the rest stay `3/3`.
-- Won/lost menu drops "Continue", "Restart" → "Play".
-- Sound: every effect throttled + `snd.stop()` before replay — kills the
-  overlapping/comb-filter "the sound played 3×" mush.
-- 0.35 s cooldown after a wrong click (no spam).
-- Click sound on every menu widget.
-- Tooltip semi-transparent + wider (no orphaned cell tile).
-- Resolved rows pop in as a real **staggered cascade** (visual + sound).
-- **Long-press a candidate** to "define" its cell, with a radial fill ring.
-- Brief **slow-mo** when a 3+-cell cascade starts.
+## Done — 2026-05-24 (portrait / mobile layout)
 
-### Commit `527618e` — GAME_REVIEW §5 retention/reach plan
-- **#1 Daily Puzzle** — `model/daily.py`, one date-seeded board a day,
-  identical for everyone; `FieldAndRules(seed=)` makes any board
-  reproducible. Menu shows "Daily #N" (+ ✓ when solved).
-- **#2 Achievements + streaks** — `model/achievements.py` (10 badges).
-  `Stats` restructured: win streak, Daily streak, badge set (legacy flat
-  saves still load). New **Progress** screen = streaks + per-mode stats +
-  badge grid; freshly-earned badges shown on the win plaque.
-- **#3 Retry same board** — win/lose plaque offers Retry (same seed) / New.
-- **#4 Zen mode** — menu toggle; mistakes count for score but never end the
-  run; left panel shows a ZEN badge instead of lives.
-- **#6 Result sharing** — `view/clipboard.py`, "Copy result" on a win.
-- **#7 Quick 3×3** — a fourth board size.
-- Menu reworked: Daily button, Zen toggle, 4-way size, Progress button
-  (per-mode stats moved off the menu onto the Progress screen).
+The game now lays out in **two orientations**, chosen at import in `view/window.py`:
+`PORTRAIT` defaults true on the web build (`sys.platform=='emscripten'`),
+false on desktop, overridable by `EINSTEIN_PORTRAIT`. `build_web.sh` reads the
+dims with `EINSTEIN_PORTRAIT=1`, so the **web bundle ships portrait** (canvas
+760×1256); desktop runs landscape unchanged.
 
-## Still open — GAME_REVIEW.md §5
+- **Portrait stack:** a slim info strip on top (MENU · TIME · HINT, then
+  LIVES/ZEN · SOLVED · MODE), the board **maximised by width** below it
+  (`BOARD_SPAN = W − 2·14`, so 4×4–6×6 cells are much larger than landscape),
+  and the clues spread across the bottom in as many columns as fit
+  (`_build_rules_buttons_portrait`). The board/cell/candidate code is shared —
+  only the region placement branches on `PORTRAIT`.
+- New portrait draw paths: `_draw_top_strip` (+ tutorial variant with a
+  6-dot progress row), `_draw_rules_panel`/`_draw_progress`/`_heart_pos`/
+  `_draw_message` all branch; shadow strips are landscape-only.
+- **Bigger popups on mobile.** Every overlay is rendered at natural size then
+  drawn *and hit-tested* through a uniform `ui_scale` (1.28 in portrait) on the
+  `_Overlay` base — no per-panel font/layout retuning, no overflow. `window`
+  calls `set_ui_scale()`. Also: the win plaque drops its flavour line when a
+  NEW RECORD banner is shown (they used to collide).
 
-- **#5** ambient music — needs a CC0 audio file (not invented). Cascade
-  combo-pitch — pygame has no pitch-shift; would need resampled variants.
-- **#8** itch.io page + 3 shorts — not code; page copy is ready in
-  `GAME_REVIEW.md §4`.
-- **#9** weekly hard challenge — deferred until a live-player test.
+## Done — 2026-05-24 (GAME_REVIEW §2/§5 follow-up)
+
+New sound assets pulled from `origin/main`: `ambient_loop.ogg` + `pick_2/3/4`.
+
+- **Solver audit.** Fixed an operator-precedence bug in the three-in-a-row
+  branch of `SelfWalkthrough` (`and` bound tighter than `or`). Cross-checked
+  with an independent exact CSP solver: **212 generated boards across every
+  size/difficulty all have a unique solution** → the "never a guess" promise
+  holds. Generation stress unchanged (270 boards ~24 s, no failures).
+- **HINT always useful.** `find_hint_target` now covers triple clues (via the
+  known answer grid) and falls back to a solution-derived "safe pop" when no
+  clue yields a clean elimination, so the button never says "no hint" on a
+  solvable board. Clue-less hints read "pop this one".
+- **Ambient music.** `SoundManager` loops `ambient_loop` on reserved channel 0
+  with its own volume; a **MUSIC** slider joins the renamed **SOUND** slider in
+  the menu. `settings.music` persists. The loop self-re-asserts (web needs a
+  user gesture to start audio).
+- **Cascade juice.** Combo-pitch: cascade depth plays `pick → pick_2 → pick_3
+  → pick_4`. A floating **"+N chain!"** appears when one click resolves ≥3
+  cells, plus a wide slow "wave" ripple ring per resolved cell.
+- **Reduce-motion** toggle (`settings.reduce_motion`): gates screenshake, the
+  cascade slow-mo, particle bursts, confetti and the vignette pulse; localized
+  flashes/rings/cell-pops stay so feedback is still clear.
+
+## Done — 2026-05-24
+
+A fix-list pass on the 2026-05-20 reshape (uncommitted on `claude/work`).
+
+### Cascade
+- **Empty-cell softlock fixed.** `GameWindow.set_solution(grid)` is now called
+  (presenter passes `model.field` / a logic level's `solution`) and
+  `_cascade_resolve` resolves each cell to its *correct* value. A stale cascade
+  beat can no longer place a value already in the row, which is what used to
+  blank a cell (no big cell, solved-count short) and lock the board.
+  `_create_big_button`'s duplicate drop now only fires for real puzzles
+  (`_row_cascade`), so the free practice block can't be blanked by it either.
+- Cascade steps slowed so the stagger is visible: `BIG_CASCADE_STEP` 0.10→0.20,
+  `ROW_CASCADE_STEP` 0.05→0.13.
+
+### Tutorial (block 0)
+- **Exactly 4-6-8-4-6-8 gestures.** Row cascade is turned off in block 0
+  (`set_row_cascade(False)`), so each cell costs one gesture: tap cells keep all
+  three candidates (two taps each, 2/3/4 cells), hold cells are one hold each
+  (4/6/8 cells). `_BLOCK0_CELLS` is now `[2,3,4,4,6,8]`.
+- The wrong gesture (a hold on the tap half, a tap on the hold half) is now
+  silently ignored — a small nudge, no teaching popup.
+- The welcome / pre-level-4 popup animations are redrawn as real board cells:
+  true row colour (A/B/C), the candidate sub-grid, the board backdrop, the
+  cursor popping candidates and the radial hold-fill ring → big-cell bloom.
+
+### Hints
+- The HINT button is back (bottom of the left panel). It is offered after the
+  idle window on Easy/Normal, is **always** present in Zen (free), and never on
+  Hard or in the tutorial. Pressing it rings a candidate + its clue; the
+  highlight now stays until the player's next move (no 5 s auto-clear).
+
+### Clipboard
+- "Copy result" no longer throws an unhandled Promise rejection on itch: the
+  synchronous `execCommand` path is tried first and `writeText`'s promise gets a
+  `.catch`.
+
+### Progress screen
+- The five milestone-star columns are spread out (`_STAR_GAP` 4→12) and badges
+  render in three columns with a dot marker.
+
+## Done — 2026-05-20
+
+A large reshape of features + bug-fix list (uncommitted on `claude/work`).
+
+### Modes / progression
+- 3×3 removed as a selectable size; sizes are now 4×4 / 5×5 / 6×6.
+- Mode progression: only **Easy 4×4** is open at first; clear 3 wins to
+  unlock the next size, and 3 wins in every size of a difficulty to unlock
+  the next difficulty. Locked options render with a padlock + tooltip.
+- Debug: pressing **`U`** flips `settings.unlock_all` and unlocks everything
+  (not surfaced in the UI).
+
+### Seeded puzzles
+- **Daily / Weekly / Monthly** puzzles now all live in `model/daily.py`. The
+  main menu shows three buttons. Inactive in Zen mode (a notice pops up).
+- Stats keep separate `daily` / `weekly` / `monthly` blocks: count, streak,
+  best streak, best time.
+
+### Zen / Retry don't record
+- `_finish_round` only records wins (and grants achievements / counters the
+  win streak) when `records_count = not (zen or is_retry)`. Loss recording
+  is similarly gated.
+
+### Stats screen rebuilt
+- Per-(difficulty × size) rows, plus three seeded-puzzle rows on top.
+- Each row: name, best time, total wins, and **5 milestone stars** earned
+  at 5 / 10 / 20 / 50 / 100 wins (grey until earned).
+- Win-rate column removed. Legacy 1-3 best-stars removed.
+- Achievements badges still shown as a compact list under the table.
+
+### Hint rework
+- The HINT button is gone. Hints **auto-show after idle**: 20 s on Easy,
+  40 s on Normal, never on Hard / tutorial.
+- A hint no longer reveals the answer of a random cell. It picks an
+  **unsatisfied clue** that still eliminates a candidate, then rings both
+  the clue and the candidate to pop (`pop this — see the clue`). Logic for
+  `^`, `<->` and `...`; triple clues fall through to the next rule.
+
+### Auto-dim clues
+- `GameWindow.auto_dim_satisfied_rules()` runs after every cell change.
+  A clue whose values are all in solved big cells gets pressed (the same
+  dim state a manual click on a clue produces).
+
+### Win plaque
+- Stars row + score line gone. The plaque shows the run time large with
+  `best XX:XX` underneath and, if the run beat the previous best, a
+  pulsing **NEW RECORD!** banner above the time block.
+
+### Cascade
+- Small candidates being struck from a row by a `_remove_all_in_row` step
+  now stagger by `ROW_CASCADE_STEP=0.05 s` per cell. `BIG_CASCADE_STEP`
+  dropped from 0.12 → 0.10.
+
+### Tutorial
+- **Block 0 ("Entry") expanded to 6 levels** (4-6-8-4-6-8 unsolved cells).
+  Levels 0-2 are tap-only (`level.hold_ok = False`); 3-5 are hold-only
+  (`level.tap_ok = False`). Using the wrong gesture shows a TIP popup.
+- A "switch to hold" popup pops once before level 4 (`gesture_intro()`).
+- TutorialPopup can render a **looped cursor animation** in-panel:
+  - `animation='pop_to_solve'` — welcome popup, cursor taps two candidates,
+    the third remains.
+  - `animation='hold_to_define'` — pre-level-4 popup, cursor holds a
+    candidate with a growing radial-fill ring; cell snaps to that glyph.
+- Tracker tuple now `(name, cleared, total, done, is_current)`. The old
+  4-tuple form is still tolerated for legacy saves.
+
+### UI cleanup
+- Theme switcher gone. `mocha` is the only palette; `view/palettes.py` is
+  reduced to a single `PALETTE` constant.
+- Lives-increase debug footer (`L = +life`) removed from the UI. The L /
+  +/= keyboard shortcuts still call `add_life()` for debugging.
+
+### Bug fixes
+- **Save lock / load hang**: `FieldAndRules._initialize_self_walkthrough`
+  used to spin forever on pathological seeds. Added a 600-add /
+  400-attempt cap that raises `RuntimeError`; the presenter catches it and
+  re-rolls (or, for seeded puzzles, mutates the seed locally so the user's
+  session at least starts).
+- **Clipboard blocked on itch**: `view/clipboard.py` now falls back to an
+  off-screen `<textarea>` + `execCommand('copy')` when
+  `navigator.clipboard.writeText` is blocked by the iframe's
+  Permissions-Policy.
+- **Duplicate value in top row**: `_create_big_button` refuses to create a
+  second big cell with a value that's already solved elsewhere in
+  `_big_buttons` — silently dropping a stale cascade request instead of
+  rendering two identical cells in one row.
+- **Itch iframe extra rows**: build_web.sh canvas CSS replaced — the old
+  `object-fit:contain` doesn't apply to `<canvas>`, so the canvas would
+  paint at natural size inside a small iframe. Now the canvas is absolutely
+  positioned and `max-width:100% / max-height:100%`, with `html, body`
+  pinned to viewport size and `overflow:hidden`.
 
 ## Verified
 All work tested headless (`SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy`):
-tutorial 1-2-3 clicks + solvability, tracker, full 18-level run, seeded
-board + Retry reproducibility, Daily, Zen no-game-over, 3×3, cascade,
-slow-mo, long-press, every overlay renders on-screen, menu flow, win/lose
-flow, real `run()` loop.
+- enter_game flow → menu → playing → win plaque (with the new layout).
+- Tutorial walks through the expanded 6-level entry block.
+- Locks: only `[False, True, True]` for sizes when at Easy with no wins.
+- `unlock_all` debug flag unlocks everything.
+- `auto_dim_satisfied_rules()` flips clues to pressed once their values are
+  all solved.
+- Stress test: 270 (size × difficulty × seed) board generations in ~20 s,
+  no hang.
 
 ## Build
 `bash build_web.sh` → `einsteingame-itch.zip` (~13.8 MB, gitignored).
 CDN mirror persists under `~/.cache/einstein-pygame-cdn/`.
 
 ## Earlier work
-The 6-block tutorial rework + web-build optimization landed in an earlier
-session (see git history before `354fa00`).
+See git history before this session (b2d0e0a / 527618e / 354fa00).

@@ -110,6 +110,11 @@ sed -i \
 # loader so it looks like the in-game loading screen — a mismatched fb_ar is
 # what makes the fullscreen view blurry, and the default loader shows raw
 # green/blue boxes before the game's own loading screen.
+# The fb here is the LANDSCAPE (desktop) default — that is what the build
+# machine reports. At runtime the game picks portrait on a phone (taller-than-
+# wide viewport); a small JS observer (below) then keeps the canvas CSS aspect
+# in sync with whatever framebuffer the game actually creates, so either
+# orientation fits without blur.
 DIMS=$(PYGAME_HIDE_SUPPORT_PROMPT=hide python3 -c \
     "import view.window as w; print(w.CANVAS_WIDTH, w.CANVAS_HEIGHT)" \
     2>/dev/null | tail -1)
@@ -139,11 +144,21 @@ src = re.sub(r'Screen\s*:\s*\d+x\d+',  'Screen  : %sx%s' % (cw, ch), src)
 # z-index:4 keeps these elements below the (initially transparent) game
 # canvas, so they vanish the instant the game draws its first frame.
 if 'einstein-skin' not in src:
-    skin = '''<style id="einstein-skin">
-  html, body { background:#1c1819 !important; }
+    # The canvas always letterboxes to the viewport while preserving the
+    # game's aspect ratio. Two CSS variables (--ar, --ari) drive the
+    # `min()`-based width/height — taking the smaller of "fill width
+    # horizontally, derive height" and "fill height vertically, derive
+    # width" gives a proper contain-fit that works inside an iframe as
+    # well as in fullscreen on a much larger display.
+    skin = ('''<style id="einstein-skin">
+  :root { --ar: AR; --ari: AR_INV; }
+  html, body { background:#1c1819 !important;
+               margin:0 !important; padding:0 !important;
+               overflow:hidden !important;
+               width:100%% !important; height:100%% !important; }
   #status { display:block; text-align:center; margin:0;
             color:#8f8a8d; font:600 14px Arial,sans-serif; }
-  #transfer { position:fixed; left:0; right:0; top:calc(50% + 14px);
+  #transfer { position:fixed; left:0; right:0; top:calc(50%% + 14px);
               z-index:4; pointer-events:none; }
   #progress { -webkit-appearance:none; appearance:none; width:240px;
               height:6px; border:0; background:#322c30; border-radius:3px;
@@ -155,22 +170,38 @@ if 'einstein-skin' not in src:
              border:1px solid #3b353b; border-radius:12px;
              font:600 14px Arial,sans-serif !important;
              padding:13px 26px !important; }
-  #einstein-dots { position:fixed; left:0; right:0; top:calc(50% - 78px);
+  #einstein-dots { position:fixed; left:0; right:0; top:calc(50%% - 78px);
                    text-align:center; z-index:4; pointer-events:none;
                    font-size:0; }
   #einstein-dots i { display:inline-block; width:11px; height:11px;
-                     border-radius:50%; margin:0 6px; }
-  #einstein-brand { position:fixed; left:0; right:0; top:calc(50% - 56px);
+                     border-radius:50%%; margin:0 6px; }
+  #einstein-brand { position:fixed; left:0; right:0; top:calc(50%% - 56px);
                     text-align:center; z-index:4; pointer-events:none;
                     color:#f5f0ec; font:700 42px Arial,sans-serif;
                     letter-spacing:13px; padding-left:13px; }
-  /* keep the game un-distorted: the render is letterboxed inside whatever
-     box pygbag gives the canvas, instead of being squashed to a square */
-  canvas, #canvas, #canvas-3d {
-    object-fit:contain !important; max-width:100vw !important;
-    max-height:100vh !important; }
+  /* pygbag's own `canvas.emscripten` stretches to 100%%/100%% with
+     top/bottom/left/right:0 — and has a higher specificity (0,1,1) than a
+     bare `canvas` rule, so we match the same class to override it.
+     IMPORTANT: only target the 2D canvas (#canvas). The page also ships a
+     hidden 3D canvas (#canvas3d, `hidden` attribute) — if our rules
+     applied to it, `display:block !important` would override the `hidden`
+     attribute and the empty 3D canvas would float on top of the 2D one,
+     silently eating every click. The `[hidden]{display:none!important}`
+     safety net at the end keeps that from biting if pygbag ever adds
+     another hidden canvas. */
+  canvas.emscripten#canvas, body canvas#canvas {
+    display:block !important;
+    position:absolute !important;
+    inset:0 !important;
+    transform:none !important;
+    width:  min(100vw, calc(100vh * var(--ar)))  !important;
+    height: min(100vh, calc(100vw * var(--ari))) !important;
+    max-width:none !important; max-height:none !important;
+    object-fit:contain !important;
+    margin:auto !important; padding:0 !important; }
+  canvas[hidden] { display:none !important; }
 </style>
-'''
+''' % ()).replace('AR_INV', '%.4f' % (1.0 / ar)).replace('AR', '%.4f' % ar)
     src = src.replace('</head>', skin + '</head>', 1)
 
     # mobile-friendly viewport + iOS "add to home screen" fullscreen
@@ -208,7 +239,21 @@ if 'einstein-skin' not in src:
         'window.AudioContext=W;window.webkitAudioContext=W;}}catch(e){}'
         '})();</script>\n')
 
-    brand = (fixjs
+    # keep the CSS aspect (--ar / --ari) locked to the live canvas backing, so
+    # whichever orientation the game picks at runtime (landscape on desktop,
+    # portrait on a phone) the canvas contain-fits without stretching.
+    arjs = (
+        '<script id="einstein-ar">'
+        '(function(){function u(){var c=document.getElementById("canvas");'
+        'if(c&&c.width>1&&c.height>1){var a=c.width/c.height;'
+        'var s=document.documentElement.style;'
+        's.setProperty("--ar",a.toFixed(4));'
+        's.setProperty("--ari",(1/a).toFixed(4));}}'
+        'setInterval(u,400);'
+        'window.addEventListener("resize",u);'
+        'window.addEventListener("orientationchange",u);})();</script>\n')
+
+    brand = (fixjs + arjs
              + '<div id="einstein-dots">'
              '<i style="background:#a87377"></i>'
              '<i style="background:#a5674c"></i>'

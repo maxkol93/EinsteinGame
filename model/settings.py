@@ -1,4 +1,4 @@
-"""Persistent player settings: volume, palette, difficulty, tooltips, touch
+"""Persistent player settings: volume, difficulty, tooltips, touch
 mode and whether the tutorial has been seen.
 
 Same storage strategy as model.stats — a JSON blob in the home directory on
@@ -13,22 +13,27 @@ import sys
 _IS_WEB = sys.platform == 'emscripten'
 _STORE_KEY = 'einsteingame_settings'
 
-_PALETTES = ('mocha', 'nord', 'sunset')
 _DIFFICULTIES = (0, 1, 2)        # easy / normal / hard
-_SIZES = (3, 4, 5, 6)            # 3x3 is the "Quick" board
+_SIZES = (4, 5, 6)               # 3×3 was retired
 
 _DEFAULTS = {
     'volume': 0.7,
-    'palette': 'mocha',
+    # ambient music loop — quieter than the SFX by default
+    'music': 0.5,
     'difficulty': 0,
-    'size': 6,
+    'size': 4,
     'tooltips': True,
     'touch': False,
+    # accessibility: damp screenshake / slow-mo / particle bursts
+    'reduce_motion': False,
     # Zen mode — mistakes never end the run; the board is a calm solve
     'zen': False,
     # how many of the 6 onboarding blocks the player has cleared (0..6).
     # 6 means the whole tutorial is done and every game mode is unlocked.
     'tutorial_blocks': 0,
+    # debug flag (set by hidden 'U' key) — once true, every difficulty and
+    # board size is unlocked regardless of the per-mode win counts
+    'unlock_all': False,
 }
 
 TUTORIAL_BLOCKS = 6
@@ -74,8 +79,11 @@ class Settings(object):
             self._data['volume'] = min(1.0, max(0.0, v))
         except (ValueError, TypeError):
             pass
-        if stored.get('palette') in _PALETTES:
-            self._data['palette'] = stored['palette']
+        try:
+            mv = float(stored.get('music', self._data['music']))
+            self._data['music'] = min(1.0, max(0.0, mv))
+        except (ValueError, TypeError):
+            pass
         try:
             d = int(stored.get('difficulty', self._data['difficulty']))
             if d in _DIFFICULTIES:
@@ -88,7 +96,8 @@ class Settings(object):
                 self._data['size'] = sz
         except (ValueError, TypeError):
             pass
-        for flag in ('tooltips', 'touch', 'zen'):
+        for flag in ('tooltips', 'touch', 'zen', 'unlock_all',
+                     'reduce_motion'):
             if flag in stored:
                 self._data[flag] = bool(stored[flag])
         # tutorial progress — a 0..6 block count. Accept the legacy boolean

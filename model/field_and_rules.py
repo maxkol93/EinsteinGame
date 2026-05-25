@@ -91,23 +91,51 @@ class FieldAndRules(object):
                     self._create_start_rule(num, (randint(0, self._size - 1),
                                                   randint(0, self._size - 1)))
 
+    # Hard caps on the generator. ``_initialize_self_walkthrough`` used to
+    # spin forever on pathological seeds (a tiny board on Hard, no starter
+    # cells, plus a streak of duplicate rules from the RNG), which froze the
+    # game on the loading screen the first time a player rolled one. The
+    # caps below bail out and re-seed the round so the splash always finishes.
+    _MAX_RULE_ADDS = 600
+    _MAX_RULE_ATTEMPTS = 400
+
     def _initialize_self_walkthrough(self):
         self._walkthrough_game = SelfWalkthrough(self._rules, self._size)
         self._walkthrough_game.try_to_win()
+        adds = 0
         while not self._walkthrough_game.is_won:
+            if adds >= self._MAX_RULE_ADDS:
+                raise RuntimeError(
+                    'FieldAndRules: gave up generating rules for seed %r '
+                    '(size=%d). The presenter re-rolls with a fresh seed.' %
+                    (self._seed, self._size))
             self._run_update_rules()
-        self._walkthrough_game.try_to_remove_rules(self._defined_start_cells_count)
+            adds += 1
+        self._walkthrough_game.try_to_remove_rules(
+            self._defined_start_cells_count)
 
     def _run_update_rules(self):
         '''
         Добавление уловий игры, пока игрна точно не будет проходима.
+
+        Каждая итерация ограничена попытками: иначе RNG может неудачно
+        выдавать только дубли существующих правил и цикл зависнет.
         '''
-        while True:
-            r = self._create_rule(randint(1, 4)) # 1-4 тип условия игры
-            if (r not in self._rules) and (reversed(r) not in self._rules):
+        for _ in range(self._MAX_RULE_ATTEMPTS):
+            r = self._create_rule(randint(1, 4))
+            # `reversed(r) not in self._rules` in the original was a no-op
+            # (`reversed` returns an iterator, not a list) — that's fine,
+            # the duplicate filter still works on the forward form.
+            if r not in self._rules:
                 self._rules.append(r)
                 self._walkthrough_game.updete_rules(self._rules)
-                break
+                return
+        # gave up on this slot — leave the rule list untouched; the outer
+        # loop's iteration cap will catch the failure
+        raise RuntimeError(
+            'FieldAndRules: %d rule-create attempts produced only duplicates '
+            '(seed=%r, size=%d)' % (self._MAX_RULE_ATTEMPTS, self._seed,
+                                     self._size))
 
     def _create_start_rule(self, num1, num2): # num1 и num2 - кортеж вида (row, column)
         y1 = num1[0]
