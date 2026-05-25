@@ -1,58 +1,72 @@
 import Phaser from 'phaser';
-import { COLORS, palette } from '../config';
+import { COLORS, FONT, palette, brighten } from '../config';
+import { roundedTex, strokedRoundedTex } from './textures';
 
 export interface ButtonOpts {
   fontSize?: number;
   fill?: number;
   textColor?: string;
   selected?: boolean;
+  radius?: number;
 }
 
-export interface UIButton extends Phaser.GameObjects.Container {
-  bg: Phaser.GameObjects.Rectangle;
-  label: Phaser.GameObjects.Text;
+export interface BtnHandle {
+  root: Phaser.GameObjects.Container;
   setSelected(on: boolean): void;
 }
 
-/** A rounded-look rectangular button with hover/press feedback. */
+/**
+ * Rounded button. The interactive element is the background *Image* (a tinted
+ * rounded-rect texture) — NOT the container. A container's custom hit-area is
+ * framed differently from a GameObject's and ends up offset; an Image's hit
+ * area is its own (origin-0.5) frame, so collider == visual exactly.
+ */
 export function makeButton(
   scene: Phaser.Scene,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  text: string,
-  onClick: () => void,
-  opts: ButtonOpts = {},
-): UIButton {
+  x: number, y: number, w: number, h: number,
+  text: string, onClick: () => void, opts: ButtonOpts = {},
+): BtnHandle {
+  const radius = opts.radius ?? 12;
   const fill = opts.fill ?? COLORS.panel;
-  const bg = scene.add.rectangle(0, 0, w, h, fill).setStrokeStyle(2, COLORS.accent, opts.selected ? 0.9 : 0.22);
+  const bg = scene.add.image(0, 0, roundedTex(scene, w, h, radius)).setTint(fill);
+  bg.setInteractive({ useHandCursor: true });
+  const outline = scene.add
+    .image(0, 0, strokedRoundedTex(scene, w, h, radius, 3))
+    .setTint(0xffffff)
+    .setAlpha(opts.selected ? 0.9 : 0);
   const label = scene.add
     .text(0, 0, text, {
-      fontFamily: 'Arial, sans-serif',
-      fontStyle: 'bold',
-      fontSize: `${opts.fontSize ?? 22}px`,
+      fontFamily: FONT, fontStyle: 'bold',
+      fontSize: `${opts.fontSize ?? 21}px`,
       color: opts.textColor ?? palette.text,
     })
     .setOrigin(0.5);
-
-  const c = scene.add.container(x, y, [bg, label]) as UIButton;
-  c.bg = bg;
-  c.label = label;
-  c.setSize(w, h);
-  c.setInteractive(new Phaser.Geom.Rectangle(-w / 2, -h / 2, w, h), Phaser.Geom.Rectangle.Contains);
+  const root = scene.add.container(x, y, [bg, outline, label]);
 
   let selected = !!opts.selected;
-  c.setSelected = (on: boolean) => {
-    selected = on;
-    bg.setStrokeStyle(2, COLORS.accent, on ? 0.9 : 0.22);
-    bg.setFillStyle(on ? COLORS.panel : fill, 1);
-  };
-  c.on('pointerover', () => bg.setStrokeStyle(2, COLORS.accent, selected ? 1 : 0.6));
-  c.on('pointerout', () => bg.setStrokeStyle(2, COLORS.accent, selected ? 0.9 : 0.22));
-  c.on('pointerdown', () => {
-    scene.tweens.add({ targets: c, scale: 0.95, duration: 70, yoyo: true });
+  const refreshOutline = () => outline.setAlpha(selected ? 0.9 : 0);
+
+  bg.on('pointerover', () => {
+    scene.tweens.add({ targets: root, scaleX: 1.03, scaleY: 1.03, duration: 90 });
+    bg.setTint(brighten(fill, 42));
+    if (!selected) outline.setAlpha(0.5);
+  });
+  bg.on('pointerout', () => {
+    scene.tweens.add({ targets: root, scaleX: 1, scaleY: 1, duration: 90 });
+    bg.setTint(selected ? brighten(fill, 18) : fill);
+    refreshOutline();
+  });
+  bg.on('pointerdown', () => {
+    scene.tweens.add({ targets: root, scaleX: 0.96, scaleY: 0.96, duration: 70, yoyo: true });
     onClick();
   });
-  return c;
+
+  return {
+    root,
+    setSelected(on: boolean) {
+      selected = on;
+      bg.setTint(on ? brighten(fill, 18) : fill);
+      refreshOutline();
+    },
+  };
 }

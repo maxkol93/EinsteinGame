@@ -1,21 +1,42 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, palette } from '../config';
+import { COLORS, GAME, FONT, palette, rowColor, brighten } from '../config';
 import { generatePuzzle, FieldAndRules, COMPLEXITY } from '../model/fieldAndRules';
 import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton } from '../ui/button';
+import { roundedTex } from '../ui/textures';
+import { Fx } from '../fx/fx';
 
+// Layout mirrors the pygame landscape build (view/window.py).
+const SPAN = 615;
+const GAP = 3;
+const MARGIN = 60;
+const PANEL = 280;
+const BX = PANEL + MARGIN; // board origin x = 340
+const BY = MARGIN; // board origin y = 60
+const CLUE_X = BX + SPAN + MARGIN; // right panel x = 1015
+const RULE_CELL = 38;
+const RULES_TOP = 54;
+const STEP_MS = 130;
 const MAX_LIVES = 3;
-const STEP_MS = 90; // delay per cascade step
-const DIFF_LABEL = ['EASY', 'NORMAL', 'HARD'];
+const DIFF = ['EASY', 'NORMAL', 'HARD'];
+const OP_SYMBOL: Record<string, string> = { '^': '↕', '<->': '↔', '...': '…' };
 
-interface PressInfo {
-  y: number;
-  x: number;
-  n: number;
-  fired: boolean;
+let TILE = '';
+let BIG = '';
+let MINI = '';
+
+interface Chip {
+  img: Phaser.GameObjects.Image;
+  txt: Phaser.GameObjects.Text;
+  cx: number;
+  cy: number;
+  sub: number;
+  base: number;
 }
+interface PressInfo { y: number; x: number; n: number; fired: boolean; }
+interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; rule: Rule; gx: number; gy: number; dim: boolean; }
 
 export class GameScene extends Phaser.Scene {
   private size = 4;
@@ -24,16 +45,16 @@ export class GameScene extends Phaser.Scene {
 
   private model!: FieldAndRules;
   private board!: PuzzleBoard;
+  private fx!: Fx;
 
-  // rendering
-  private boardX0 = 0;
-  private boardY0 = 0;
   private cellSide = 0;
-  private chips: Array<Array<Map<number, Phaser.GameObjects.Container>>> = [];
-  private cellBg: Phaser.GameObjects.Rectangle[][] = [];
-  private bigText: Array<Array<Phaser.GameObjects.Text | null>> = [];
+  private candCols = 2;
+  private candRows = 2;
+  private chips: Array<Array<Map<number, Chip>>> = [];
+  private bigObjs: Array<Array<{ img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text } | null>> = [];
+  private clueGroups: ClueGroup[] = [];
+  private tooltip?: Phaser.GameObjects.Container;
 
-  // hud
   private timerText!: Phaser.GameObjects.Text;
   private hearts: Phaser.GameObjects.Text[] = [];
   private lives = MAX_LIVES;
@@ -41,7 +62,6 @@ export class GameScene extends Phaser.Scene {
   private seconds = 0;
   private timerEvent?: Phaser.Time.TimerEvent;
 
-  // state
   private busy = false;
   private gameOver = false;
   private press: PressInfo | null = null;
@@ -55,7 +75,6 @@ export class GameScene extends Phaser.Scene {
     this.size = data?.size ?? 4;
     this.difficulty = data?.difficulty ?? 0;
     this.seed = data?.seed ?? 0;
-    // reset per-run state (scene.restart reuses the instance)
     this.lives = MAX_LIVES;
     this.mistakes = 0;
     this.seconds = 0;
@@ -63,65 +82,77 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = false;
     this.press = null;
     this.hearts = [];
+    this.clueGroups = [];
+    this.tooltip = undefined;
   }
 
   create(): void {
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBackgroundColor(COLORS.bg);
+    this.fx = new Fx(this);
+
+    TILE = roundedTex(this, 80, 80, 16);
+    BIG = roundedTex(this, 160, 160, 18);
+    MINI = roundedTex(this, 64, 64, 12);
 
     try {
       const gen = generatePuzzle(this.size, this.difficulty, this.seed || undefined);
       this.model = gen.model;
       this.seed = gen.seed;
-    } catch (e) {
+    } catch {
       this.add.text(GAME.width / 2, GAME.height / 2, 'Failed to generate a board.\nTap to return to menu.', {
-        fontFamily: 'Arial', fontSize: '24px', color: palette.text, align: 'center',
+        fontFamily: FONT, fontSize: '24px', color: palette.text, align: 'center',
       }).setOrigin(0.5);
       this.input.once('pointerdown', () => this.scene.start('menu', this.menuData()));
       return;
     }
 
+    this.cellSide = Math.floor((SPAN - (this.size - 1) * GAP) / this.size);
+    this.candCols = Math.ceil(Math.sqrt(this.size));
+    this.candRows = Math.ceil(this.size / this.candCols);
     this.board = new PuzzleBoard(this.size, this.model.solution, this.model.definedStartCells);
 
-    this.buildTopBar();
+    this.buildPanel();
     this.buildBoard();
     this.buildClues();
     this.bindInput();
     this.startTimer();
 
-    if (this.board.isWon) this.time.delayedCall(200, () => this.finish(true));
+    if (this.board.isWon) this.time.delayedCall(250, () => this.finish(true));
   }
 
-  // --------------------------- HUD ---------------------------
+  // --------------------------- left panel ---------------------------
 
-  private buildTopBar(): void {
-    makeButton(this, 80, 34, 120, 44, '☰ Menu', () => this.scene.start('menu', this.menuData()), {
-      fontSize: 18,
-    });
+  private buildPanel(): void {
+    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.scene.start('menu', this.menuData()), { fontSize: 19 });
 
+    this.add.text(PANEL / 2, 120, 'TIME', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     this.timerText = this.add
-      .text(GAME.width / 2, 34, '00:00', {
-        fontFamily: 'Arial', fontStyle: 'bold', fontSize: '30px', color: palette.text,
-      })
+      .text(PANEL / 2, 152, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text })
       .setOrigin(0.5);
+
+    for (let i = 0; i < MAX_LIVES; i++) {
+      const { cx, cy } = this.heartPos(i);
+      this.hearts.push(this.add.text(cx, cy, '♥', { fontFamily: FONT, fontSize: '32px', color: '#e05a68' }).setOrigin(0.5));
+    }
+    this.updateLives();
 
     const cplx = COMPLEXITY[this.size][this.difficulty];
     this.add
-      .text(GAME.width / 2, 62, `${DIFF_LABEL[this.difficulty]} · ${this.size}×${this.size} · ${cplx} given`, {
-        fontFamily: 'Arial', fontSize: '14px', color: palette.accent,
+      .text(PANEL / 2, 268, `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`, {
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text,
       })
       .setOrigin(0.5);
+    this.add
+      .text(PANEL / 2, 292, `${cplx} cells given`, { fontFamily: FONT, fontSize: '13px', color: palette.accent })
+      .setOrigin(0.5);
 
-    // hearts on the right
-    for (let i = 0; i < MAX_LIVES; i++) {
-      const h = this.add
-        .text(GAME.width - 40 - (MAX_LIVES - 1 - i) * 36, 34, '♥', {
-          fontFamily: 'Arial', fontSize: '30px', color: '#e05a68',
-        })
-        .setOrigin(0.5);
-      this.hearts.push(h);
-    }
-    this.updateLives();
+    makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+  }
+
+  private heartPos(i: number): { cx: number; cy: number } {
+    const start = PANEL / 2 - ((MAX_LIVES - 1) * 38) / 2;
+    return { cx: start + i * 38, cy: 212 };
   }
 
   private updateLives(): void {
@@ -134,8 +165,7 @@ export class GameScene extends Phaser.Scene {
 
   private startTimer(): void {
     this.timerEvent = this.time.addEvent({
-      delay: 1000,
-      loop: true,
+      delay: 1000, loop: true,
       callback: () => {
         if (this.gameOver) return;
         this.seconds += 1;
@@ -150,97 +180,106 @@ export class GameScene extends Phaser.Scene {
 
   // --------------------------- board ---------------------------
 
-  private buildBoard(): void {
-    const regionW = 660;
-    const regionH = GAME.height - 110;
-    const span = Math.min(regionW, regionH);
-    this.cellSide = span / this.size;
-    this.boardX0 = 30 + (regionW - span) / 2;
-    this.boardY0 = 92 + (regionH - span) / 2;
+  private cellOrigin(y: number, x: number): { ox: number; oy: number } {
+    const step = this.cellSide + GAP;
+    return { ox: BX + x * step, oy: BY + y * step };
+  }
 
+  private cellCenter(y: number, x: number): { cx: number; cy: number } {
+    const { ox, oy } = this.cellOrigin(y, x);
+    return { cx: ox + this.cellSide / 2, cy: oy + this.cellSide / 2 };
+  }
+
+  private buildBoard(): void {
     this.chips = [];
-    this.cellBg = [];
-    this.bigText = [];
+    this.bigObjs = [];
     for (let y = 0; y < this.size; y++) {
       this.chips.push([]);
-      this.cellBg.push([]);
-      this.bigText.push([]);
+      this.bigObjs.push([]);
       for (let x = 0; x < this.size; x++) {
-        const { cx, cy } = this.cellCenter(y, x);
-        const bg = this.add
-          .rectangle(cx, cy, this.cellSide - 6, this.cellSide - 6, COLORS.panel)
-          .setStrokeStyle(2, COLORS.accent, 0.18);
-        this.cellBg[y].push(bg);
         this.chips[y].push(new Map());
-        this.bigText[y].push(null);
-
+        this.bigObjs[y].push(null);
         const cell = this.board.cells[y][x];
         if (cell.value !== null) {
           this.renderBig(y, x, cell.value, false);
         } else {
-          for (const v of cell.candidates) this.makeChip(y, x, v);
+          for (const slot of this.candSlots(y, x)) this.makeChip(y, x, slot.value, slot.cx, slot.cy, slot.sub);
         }
       }
     }
   }
 
-  private cellCenter(y: number, x: number): { cx: number; cy: number } {
-    return {
-      cx: this.boardX0 + x * this.cellSide + this.cellSide / 2,
-      cy: this.boardY0 + y * this.cellSide + this.cellSide / 2,
-    };
+  private candSlots(y: number, x: number): Array<{ value: number; cx: number; cy: number; sub: number }> {
+    const cols = this.candCols;
+    const rows = this.candRows;
+    const cell = this.cellSide;
+    const { ox, oy } = this.cellOrigin(y, x);
+    const inset = Math.max(3, Math.floor(cell / 22));
+    const avail = cell - 2 * inset;
+    const sub = Math.floor(Math.min(avail / cols, avail / rows));
+    const gx = ox + Math.floor((cell - sub * cols) / 2);
+    const gy = oy + Math.floor((cell - sub * rows) / 2);
+    const out: Array<{ value: number; cx: number; cy: number; sub: number }> = [];
+    for (let index = 0; index < this.size; index++) {
+      const dy = Math.floor(index / cols);
+      const dx = index % cols;
+      const inRow = Math.min(cols, this.size - dy * cols);
+      const rowOff = Math.floor(((cols - inRow) * sub) / 2);
+      const tx = gx + rowOff + dx * sub;
+      const ty = gy + dy * sub;
+      out.push({ value: (y + 1) * 10 + index + 1, cx: tx + sub / 2, cy: ty + sub / 2, sub });
+    }
+    return out;
   }
 
-  private makeChip(y: number, x: number, value: number): void {
-    const cols = Math.ceil(Math.sqrt(this.size));
-    const rows = Math.ceil(this.size / cols);
-    const area = this.cellSide - this.cellSide * 0.16;
-    const cw = area / cols;
-    const ch = area / rows;
-    const idx = (value % 10) - 1;
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const { cx, cy } = this.cellCenter(y, x);
-    const ox = cx - area / 2 + cw / 2 + col * cw;
-    const oy = cy - area / 2 + ch / 2 + row * ch;
-    const color = COLORS.rows[String(Math.floor(value / 10))] ?? COLORS.accent;
-
-    const bg = this.add.rectangle(0, 0, cw - cw * 0.16, ch - ch * 0.16, color, 0.92);
-    const t = this.add
-      .text(0, 0, symbolFor(value), {
-        fontFamily: 'Arial', fontStyle: 'bold',
-        fontSize: `${Math.min(cw, ch) * 0.5}px`, color: '#1c1819',
+  private makeChip(y: number, x: number, value: number, cx: number, cy: number, sub: number): void {
+    const base = (sub - 3) / 80;
+    const color = rowColor(value);
+    const img = this.add.image(cx, cy, TILE).setScale(base).setTint(color);
+    img.setInteractive({ useHandCursor: true });
+    const txt = this.add
+      .text(cx, cy, symbolFor(value), {
+        fontFamily: FONT, fontStyle: 'bold',
+        fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff',
       })
       .setOrigin(0.5);
-    const chip = this.add.container(ox, oy, [bg, t]);
-    chip.setSize(cw, ch);
-    chip.setInteractive(new Phaser.Geom.Rectangle(-cw / 2, -ch / 2, cw, ch), Phaser.Geom.Rectangle.Contains);
-    (chip as unknown as { bg: Phaser.GameObjects.Rectangle }).bg = bg;
-    chip.on('pointerover', () => bg.setScale(1.06));
-    chip.on('pointerout', () => bg.setScale(1));
-    chip.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
 
-    this.chips[y][x].set(value, chip);
+    img.on('pointerover', () => {
+      if (this.busy || this.gameOver) return;
+      img.setTint(brighten(color, 42));
+      this.tweens.add({ targets: img, scaleX: base * 1.08, scaleY: base * 1.08, duration: 90 });
+      this.tweens.add({ targets: txt, scaleX: 1.08, scaleY: 1.08, duration: 90 });
+    });
+    img.on('pointerout', () => {
+      img.setTint(color);
+      this.tweens.add({ targets: img, scaleX: base, scaleY: base, duration: 90 });
+      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 90 });
+    });
+    img.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
+
+    this.chips[y][x].set(value, { img, txt, cx, cy, sub, base });
   }
 
   private renderBig(y: number, x: number, n: number, animate: boolean): void {
     const map = this.chips[y][x];
-    for (const c of map.values()) c.destroy();
+    for (const c of map.values()) { c.img.destroy(); c.txt.destroy(); }
     map.clear();
-    const color = COLORS.rows[String(Math.floor(n / 10))] ?? COLORS.accent;
-    this.cellBg[y][x].setFillStyle(color, 1).setStrokeStyle(3, COLORS.accent, 0.55);
     const { cx, cy } = this.cellCenter(y, x);
-    const t = this.add
+    const color = rowColor(n);
+    const base = this.cellSide / 160;
+    const img = this.add.image(cx, cy, BIG).setScale(animate ? base * 0.3 : base).setTint(color);
+    const txt = this.add
       .text(cx, cy, symbolFor(n), {
-        fontFamily: 'Arial', fontStyle: 'bold',
-        fontSize: `${this.cellSide * 0.5}px`, color: '#1c1819',
+        fontFamily: FONT, fontStyle: 'bold',
+        fontSize: `${Math.max(28, Math.round(this.cellSide * 0.46))}px`, color: '#ffffff',
       })
-      .setOrigin(0.5);
-    this.bigText[y][x] = t;
+      .setOrigin(0.5)
+      .setScale(animate ? 0.3 : 1);
+    this.bigObjs[y][x] = { img, txt };
     if (animate) {
-      t.setScale(0);
-      this.tweens.add({ targets: t, scale: 1, duration: 230, ease: 'Back.easeOut' });
-      this.tweens.add({ targets: this.cellBg[y][x], scaleX: 1.07, scaleY: 1.07, duration: 130, yoyo: true });
+      this.tweens.add({ targets: img, scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 340, ease: 'Back.easeOut' });
+      this.fx.bigBurst(cx, cy, this.cellSide, this.cellSide, color);
     }
   }
 
@@ -251,7 +290,7 @@ export class GameScene extends Phaser.Scene {
       if (this.press && !this.press.fired) {
         const { y, x, n } = this.press;
         this.press.fired = true;
-        this.doAction(y, x, n, false); // tap → pop
+        this.doAction(y, x, n, false);
       }
       this.press = null;
       this.longPress?.remove();
@@ -262,14 +301,14 @@ export class GameScene extends Phaser.Scene {
   private onChipDown(y: number, x: number, n: number, pointer: Phaser.Input.Pointer): void {
     if (this.busy || this.gameOver) return;
     if (pointer.rightButtonDown()) {
-      this.doAction(y, x, n, true); // right-click → define
+      this.doAction(y, x, n, true);
       return;
     }
     this.press = { y, x, n, fired: false };
     this.longPress = this.time.delayedCall(350, () => {
       if (this.press && !this.press.fired) {
         this.press.fired = true;
-        this.doAction(y, x, n, true); // long-press → define
+        this.doAction(y, x, n, true);
       }
     });
   }
@@ -278,9 +317,7 @@ export class GameScene extends Phaser.Scene {
     if (this.busy || this.gameOver) return;
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
-
     const correct = this.board.isAnswer(y, x, n);
-    // popping the answer, or defining a non-answer, is the mistake
     if (isDefine ? !correct : correct) {
       this.registerWrong(y, x, n);
       return;
@@ -298,19 +335,29 @@ export class GameScene extends Phaser.Scene {
       const chip = this.chips[s.y][s.x].get(s.n);
       if (!chip) continue;
       this.chips[s.y][s.x].delete(s.n);
+      const delay = s.step * STEP_MS;
+      // Back.easeIn overshoots up before collapsing — the squash-and-pop
       this.tweens.add({
-        targets: chip, scaleX: 0, scaleY: 0, alpha: 0,
-        delay: s.step * STEP_MS, duration: 150, ease: 'Back.easeIn',
-        onComplete: () => chip.destroy(),
+        targets: [chip.img, chip.txt], scaleX: 0, scaleY: 0, alpha: 0,
+        delay, duration: 200, ease: 'Back.easeIn',
+        onComplete: () => { chip.img.destroy(); chip.txt.destroy(); },
       });
+      this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n)));
     }
+
     for (const r of cs.resolved) {
-      this.time.delayedCall(r.step * STEP_MS + 60, () => this.renderBig(r.y, r.x, r.n, true));
+      this.time.delayedCall(r.step * STEP_MS, () => this.renderBig(r.y, r.x, r.n, true));
+    }
+
+    if (cs.resolved.length >= 3) {
+      const f = cs.resolved[0];
+      const { cx, cy } = this.cellCenter(f.y, f.x);
+      this.time.delayedCall(120, () => this.fx.comboText(cx, cy - 8, `+${cs.resolved.length} chain!`));
     }
 
     if (cs.resolved.length > 0 || cs.struck.length > 1) {
       this.busy = true;
-      this.time.delayedCall(maxStep * STEP_MS + 280, () => {
+      this.time.delayedCall(maxStep * STEP_MS + 420, () => {
         this.busy = false;
         if (!this.gameOver && this.board.isWon) this.finish(true);
       });
@@ -322,76 +369,154 @@ export class GameScene extends Phaser.Scene {
   private registerWrong(y: number, x: number, n: number): void {
     this.mistakes += 1;
     const chip = this.chips[y][x].get(n);
-    if (chip) {
-      const bg = (chip as unknown as { bg: Phaser.GameObjects.Rectangle }).bg;
-      this.tweens.add({ targets: chip, x: `+=5`, duration: 45, yoyo: true, repeat: 3 });
-      if (bg) {
-        const orig = bg.fillColor;
-        bg.setFillStyle(0xe05a68, 1);
-        this.time.delayedCall(320, () => bg.setFillStyle(orig, 0.92));
-      }
-    }
-    this.cameras.main.shake(160, 0.006);
+    const c = chip ? { cx: chip.cx, cy: chip.cy, s: chip.sub } : { ...this.cellCenter(y, x), s: this.cellSide * 0.5 };
+    this.fx.wrong(c.cx, c.cy, c.s, c.s);
+    if (chip) this.tweens.add({ targets: [chip.img, chip.txt], x: '+=5', duration: 45, yoyo: true, repeat: 3 });
     this.lives -= 1;
     this.updateLives();
+    const hp = this.heartPos(Math.max(0, this.lives));
+    this.fx.heartBreak(hp.cx, hp.cy);
     if (this.lives <= 0) this.finish(false);
+  }
+
+  private hint(): void {
+    if (this.busy || this.gameOver) return;
+    // a safe pop: any candidate that is NOT the answer can be removed
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const cell = this.board.cells[y][x];
+        if (cell.value !== null) continue;
+        const safe = cell.candidates.find((v) => !this.board.isAnswer(y, x, v));
+        if (safe === undefined) continue;
+        const chip = this.chips[y][x].get(safe);
+        if (!chip) continue;
+        this.fx.ring(chip.cx, chip.cy, 0xf06060, 30, 520, 4);
+        this.tweens.add({ targets: [chip.img, chip.txt], scaleX: chip.base * 1.18, scaleY: chip.base * 1.18, duration: 200, yoyo: true, repeat: 2 });
+        return;
+      }
+    }
   }
 
   // --------------------------- clues ---------------------------
 
   private buildClues(): void {
-    const x0 = 712;
-    const width = GAME.width - x0 - 30;
-    const y0 = 92;
-    const height = GAME.height - y0 - 24;
-    const rules = this.model.displayableRules;
+    this.add
+      .text(CLUE_X + PANEL / 2, 24, 'CLUES', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
+      .setOrigin(0.5);
 
-    this.add.text(x0, y0, 'CLUES', {
-      fontFamily: 'Arial', fontStyle: 'bold', fontSize: '20px', color: palette.text,
+    const rules = [...this.model.displayableRules].sort((a, b) => {
+      const ka = typeof a[1] === 'string' ? 1 : 0;
+      const kb = typeof b[1] === 'string' ? 1 : 0;
+      return kb - ka; // operator clues first, like the pygame layout
     });
 
-    const top = y0 + 38;
-    const rowH = Math.min(48, (height - 38) / Math.max(rules.length, 1));
-    rules.forEach((rule, i) => this.renderClueLine(rule, x0, top + i * rowH, width, rowH));
+    const ruleW = RULE_CELL * 3;
+    const colGap = 16;
+    const padX = Math.floor((PANEL - 2 * ruleW - colGap) / 2);
+    const rowH = RULE_CELL + 9;
+
+    rules.forEach((rule, i) => {
+      const ty = i % 14;
+      const tx = Math.floor(i / 14);
+      const gx = CLUE_X + padX + tx * (ruleW + colGap);
+      const gy = RULES_TOP + ty * rowH;
+      this.makeClueGroup(rule, gx, gy);
+    });
   }
 
-  private renderClueLine(rule: Rule, x0: number, y: number, width: number, rowH: number): void {
-    const tile = Math.min(rowH * 0.74, 30);
-    const fontSize = Math.min(rowH * 0.42, 18);
-    const objs: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text> = [];
-    let cx = x0 + 4;
-    const cy = y + rowH / 2;
-
-    for (const seg of ruleSegments(rule)) {
-      if (seg.kind === 'cell') {
-        const color = COLORS.rows[String(Math.floor(seg.value / 10))] ?? COLORS.accent;
-        const r = this.add.rectangle(cx + tile / 2, cy, tile, tile, color, 0.95).setStrokeStyle(1, COLORS.accent, 0.4);
-        const g = this.add
-          .text(cx + tile / 2, cy, symbolFor(seg.value), {
-            fontFamily: 'Arial', fontStyle: 'bold', fontSize: `${tile * 0.56}px`, color: '#1c1819',
-          })
+  private makeClueGroup(rule: Rule, gx: number, gy: number): void {
+    const objs: Phaser.GameObjects.GameObject[] = [];
+    for (let j = 0; j < 3; j++) {
+      const v = rule[j];
+      const sx = gx + j * RULE_CELL + RULE_CELL / 2;
+      const sy = gy + RULE_CELL / 2;
+      if (typeof v === 'number') {
+        const img = this.add.image(sx, sy, MINI).setDisplaySize(RULE_CELL - 3, RULE_CELL - 3).setTint(rowColor(v));
+        const t = this.add
+          .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '19px', color: '#ffffff' })
           .setOrigin(0.5);
-        objs.push(r, g);
-        cx += tile + 6;
+        objs.push(img, t);
       } else {
         const t = this.add
-          .text(cx, cy, seg.value, { fontFamily: 'Arial', fontSize: `${fontSize}px`, color: palette.accent })
-          .setOrigin(0, 0.5);
+          .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: palette.accent })
+          .setOrigin(0.5);
         objs.push(t);
-        cx += t.width + 8;
       }
     }
 
-    // whole-line hit area to dim a clue you've used up
+    const group: ClueGroup = { objs, rule, gx, gy, dim: false };
+    this.clueGroups.push(group);
+
     const hit = this.add
-      .rectangle(x0, y + 2, width, rowH - 4, 0xffffff, 0)
+      .rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0)
       .setOrigin(0, 0)
       .setInteractive({ useHandCursor: true });
-    let dim = false;
+    hit.on('pointerover', () => this.showTooltip(group));
+    hit.on('pointerout', () => this.hideTooltip());
     hit.on('pointerdown', () => {
-      dim = !dim;
-      objs.forEach((o) => o.setAlpha(dim ? 0.32 : 1));
+      group.dim = !group.dim;
+      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
     });
+  }
+
+  private showTooltip(group: ClueGroup): void {
+    this.hideTooltip();
+    const segs = ruleSegments(group.rule);
+    const tile = 26;
+    const fontSize = 16;
+    const pad = 12;
+    const gap = 7;
+
+    // measure
+    const tmp = this.add.text(0, 0, '', { fontFamily: FONT, fontSize: `${fontSize}px` }).setVisible(false);
+    type Tok = { kind: 'cell' | 'word'; val: string | number; w: number };
+    const toks: Tok[] = [];
+    for (const s of segs) {
+      if (s.kind === 'cell') toks.push({ kind: 'cell', val: s.value, w: tile });
+      else for (const word of s.value.split(' ')) { tmp.setText(word); toks.push({ kind: 'word', val: word, w: tmp.width }); }
+    }
+    // wrap
+    const maxW = 280;
+    const lines: Tok[][] = [[]];
+    let lineW = 0;
+    for (const tk of toks) {
+      const add = tk.w + (lineW > 0 ? gap : 0);
+      if (lineW > 0 && lineW + add > maxW) { lines.push([]); lineW = tk.w; } else lineW += add;
+      lines[lines.length - 1].push(tk);
+    }
+    tmp.destroy();
+    const lineH = Math.max(tile, fontSize + 6) + 4;
+    const widths = lines.map((ln) => ln.reduce((a, t) => a + t.w, 0) + gap * Math.max(0, ln.length - 1));
+    const pw = Math.max(...widths) + pad * 2;
+    const ph = lineH * lines.length + pad * 2;
+
+    const objs: Phaser.GameObjects.GameObject[] = [];
+    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 32)).setAlpha(0.96);
+    objs.push(bg);
+    lines.forEach((ln, li) => {
+      let x = pad;
+      const cy = pad + li * lineH + lineH / 2;
+      for (const tk of ln) {
+        if (tk.kind === 'cell') {
+          const v = tk.val as number;
+          objs.push(this.add.image(x + tile / 2, cy, MINI).setDisplaySize(tile, tile).setTint(rowColor(v)));
+          objs.push(this.add.text(x + tile / 2, cy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: '#ffffff' }).setOrigin(0.5));
+        } else {
+          objs.push(this.add.text(x, cy, tk.val as string, { fontFamily: FONT, fontSize: `${fontSize}px`, color: palette.text }).setOrigin(0, 0.5));
+        }
+        x += tk.w + gap;
+      }
+    });
+
+    let tx = group.gx - 14 - pw;
+    if (tx < 8) tx = group.gx + RULE_CELL * 3 + 14;
+    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + RULE_CELL / 2 - ph / 2));
+    this.tooltip = this.add.container(tx, ty, objs).setDepth(80);
+  }
+
+  private hideTooltip(): void {
+    this.tooltip?.destroy();
+    this.tooltip = undefined;
   }
 
   // --------------------------- end ---------------------------
@@ -400,39 +525,37 @@ export class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
     this.gameOver = true;
     this.timerEvent?.remove();
+    this.hideTooltip();
 
-    // created last, so they sit above the board by insertion order (no depth
-    // juggling — bringing the panel to the top would bury the buttons)
-    this.add.rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0.62);
-    const panelW = 460;
-    const panelH = 300;
-    this.add
-      .rectangle(GAME.width / 2, GAME.height / 2, panelW, panelH, COLORS.panel)
-      .setStrokeStyle(2, COLORS.accent, 0.5);
+    if (won) this.fx.celebrate();
+    else { this.fx.shake(13, 480); this.fx.flash(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x962226, false, 600); }
+
+    this.time.delayedCall(won ? 260 : 220, () => this.showEndPanel(won));
+  }
+
+  private showEndPanel(won: boolean): void {
+    this.add.rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0.62).setDepth(100);
+    const pw = 480;
+    const ph = 300;
     const cx = GAME.width / 2;
-    const top = GAME.height / 2 - panelH / 2;
+    const top = GAME.height / 2 - ph / 2;
+    this.add.image(cx, GAME.height / 2, roundedTex(this, pw, ph, 18)).setTint(COLORS.panel).setDepth(101);
 
     this.add
-      .text(cx, top + 52, won ? 'SOLVED!' : 'OUT OF LIVES', {
-        fontFamily: 'Arial', fontStyle: 'bold', fontSize: '40px',
-        color: won ? '#f5e7b0' : '#e05a68',
+      .text(cx, top + 54, won ? 'SOLVED!' : 'OUT OF LIVES', {
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '42px', color: won ? '#ffe27a' : '#e05a68',
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5).setDepth(102);
     this.add
-      .text(cx, top + 104, won ? `Time ${this.fmt(this.seconds)}  ·  ${this.mistakes} mistakes` : 'Better luck next board', {
-        fontFamily: 'Arial', fontSize: '20px', color: palette.accent,
+      .text(cx, top + 104, won ? `Time ${this.fmt(this.seconds)}   ·   ${this.mistakes} mistakes` : 'Better luck on the next board', {
+        fontFamily: FONT, fontSize: '20px', color: palette.accent,
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5).setDepth(102);
 
-    makeButton(this, cx - 120, top + 176, 220, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty }), {
-      fontSize: 20, fill: COLORS.rows['4'], textColor: '#1c1819',
-    });
-    makeButton(this, cx + 120, top + 176, 220, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed }), {
-      fontSize: 20,
-    });
-    makeButton(this, cx, top + 240, 220, 48, 'Menu', () => this.scene.start('menu', this.menuData()), {
-      fontSize: 18,
-    });
+    const b1 = makeButton(this, cx - 120, top + 176, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
+    const b2 = makeButton(this, cx + 120, top + 176, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed }), { fontSize: 20 });
+    const b3 = makeButton(this, cx, top + 242, 224, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
+    [b1, b2, b3].forEach((b) => b.root.setDepth(102));
   }
 
   private menuData(): { size: number; difficulty: number } {

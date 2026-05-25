@@ -10,6 +10,22 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <title>Einstein</title>
     <style>
+      /* DejaVu Sans matches the pygame build's glyph coverage (Roman numerals,
+         currency, Greek, maths) so symbols render identically. */
+      @font-face {
+        font-family: 'DejaVu Sans';
+        font-style: normal;
+        font-weight: 400;
+        src: url('./fonts/DejaVuSans.ttf') format('truetype');
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'DejaVu Sans';
+        font-style: normal;
+        font-weight: 700;
+        src: url('./fonts/DejaVuSans-Bold.ttf') format('truetype');
+        font-display: block;
+      }
       html,
       body {
         margin: 0;

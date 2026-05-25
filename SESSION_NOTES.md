@@ -50,6 +50,32 @@ Ported the whole puzzle model to TS and built a playable game on top of it.
 RNG validated against `shared/daily_vectors.json`), stats/achievements/Zen/
 tutorial, and the juice + sound pass.
 
+## 2026-05-25 — Phaser: collider fix + pygame-faithful visuals & juice
+
+- **Critical bug fixed: hit areas were offset ~½ a button's width.** Cause was
+  `container.setInteractive(Geom.Rectangle(...))` — Phaser frames a container's
+  custom hit-area differently from a GameObject's, so colliders sat left of the
+  visuals (clicking the right half of a button hit its neighbour). Fix: the
+  interactive element is now the background **Image** (origin-0.5 rounded-rect
+  texture), never the container. Proved with a hit-test sweep (`tools/probe.mjs`):
+  hit regions now align with visuals.
+- **Visuals rebuilt to match pygame** (`view/window.py`/`buttons.py`/`effects.py`):
+  canvas 1295×735, left panel (MENU/TIME/hearts/MODE/HINT), 615px board, right
+  clue panel. Rounded tiles (white tinted textures), **white DejaVu Sans glyphs**
+  (font bundled in `public/fonts`), candidate sub-grids (2×2 / 3×2), big gradient-
+  ish solved cells, clue groups of three mini-tiles with `↕ ↔ …` operators, and
+  hover **tooltips** (`A same column as B` etc.).
+- **Juice** (`src/fx/fx.ts`): candidate pop = squash-and-pop (Back.easeIn) + spark
+  burst + ring; resolved cell = overshoot bloom + 20-particle burst + colour/white
+  rings + a wide "wave" ring + white flash + screenshake; wrong = red flash + shake
+  + heart-break burst; win = gold shockwave + Mocha confetti; staggered cascade,
+  `+N chain!` combo text, hover lift/glow.
+- New: `src/ui/textures.ts` (rounded/stroked/particle textures), `src/ui/button.ts`
+  (Image-based), `src/fx/fx.ts`. HINT does a safe-pop pulse (no solver port yet).
+- **Verified:** `npm run build` green (~351 KB gz), `npm run smoke` 270/270,
+  `npm run verify` plays menu→tooltip→cascade→win with zero console errors; 4×4
+  and 6×6 Hard screenshots match the pygame look.
+
 ## Done — 2026-05-24 (mobile tweaks)
 
 - **Portrait only on actual phones.** `view/window.py` now picks orientation by
