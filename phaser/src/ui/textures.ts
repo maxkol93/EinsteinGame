@@ -49,3 +49,34 @@ export function chunkTex(scene: Phaser.Scene): string {
   g.destroy();
   return key;
 }
+
+// A rounded-rect top sheen (white → transparent vertical gradient, clipped to
+// the rounded shape). Overlaid on a resolved big cell it gives the glossy
+// highlight pygame paints in ui._draw_demo_solved / window._render_cell.
+export function sheenRoundedTex(
+  scene: Phaser.Scene, w = 160, h = 160, radius = 18,
+): string {
+  const key = `sheen_${w}x${h}_${radius}`;
+  if (scene.textures.exists(key)) return key;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+  const r = radius;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.arcTo(w, 0, w, h, r);
+  ctx.arcTo(w, h, 0, h, r);
+  ctx.arcTo(0, h, 0, 0, r);
+  ctx.arcTo(0, 0, w, 0, r);
+  ctx.closePath();
+  ctx.clip();
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, 'rgba(255,255,255,0.55)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.07)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  scene.textures.addCanvas(key, c);
+  return key;
+}

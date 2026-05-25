@@ -5,7 +5,7 @@ import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton } from '../ui/button';
-import { roundedTex } from '../ui/textures';
+import { roundedTex, strokedRoundedTex, sheenRoundedTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 
 // Layout mirrors the pygame landscape build (view/window.py).
@@ -26,10 +26,13 @@ const OP_SYMBOL: Record<string, string> = { '^': '↕', '<->': '↔', '...': '�
 let TILE = '';
 let BIG = '';
 let MINI = '';
+let SHEEN = '';
+let CHIPOUT = '';
 
 interface Chip {
   img: Phaser.GameObjects.Image;
   txt: Phaser.GameObjects.Text;
+  outline: Phaser.GameObjects.Image;
   cx: number;
   cy: number;
   sub: number;
@@ -94,6 +97,8 @@ export class GameScene extends Phaser.Scene {
     TILE = roundedTex(this, 80, 80, 16);
     BIG = roundedTex(this, 160, 160, 18);
     MINI = roundedTex(this, 64, 64, 12);
+    SHEEN = sheenRoundedTex(this, 160, 160, 18);
+    CHIPOUT = strokedRoundedTex(this, 80, 80, 16, 4);
 
     try {
       const gen = generatePuzzle(this.size, this.difficulty, this.seed || undefined);
@@ -193,12 +198,18 @@ export class GameScene extends Phaser.Scene {
   private buildBoard(): void {
     this.chips = [];
     this.bigObjs = [];
+    // A faint ghost plate behind every cell so the grid reads even when a cell
+    // is empty (window.py draws a rounded fill of brighten(bg, 14) per cell).
+    const plateTex = roundedTex(this, this.cellSide, this.cellSide, Math.max(8, Math.round(this.cellSide * 0.11)));
+    const plateColor = brighten(COLORS.bg, 14);
     for (let y = 0; y < this.size; y++) {
       this.chips.push([]);
       this.bigObjs.push([]);
       for (let x = 0; x < this.size; x++) {
         this.chips[y].push(new Map());
         this.bigObjs[y].push(null);
+        const { cx, cy } = this.cellCenter(y, x);
+        this.add.image(cx, cy, plateTex).setTint(plateColor).setDepth(0);
         const cell = this.board.cells[y][x];
         if (cell.value !== null) {
           this.renderBig(y, x, cell.value, false);
@@ -235,49 +246,97 @@ export class GameScene extends Phaser.Scene {
   private makeChip(y: number, x: number, value: number, cx: number, cy: number, sub: number): void {
     const base = (sub - 3) / 80;
     const color = rowColor(value);
-    const img = this.add.image(cx, cy, TILE).setScale(base).setTint(color);
-    img.setInteractive({ useHandCursor: true });
+    const img = this.add.image(cx, cy, TILE).setScale(base).setTint(color).setDepth(5);
+    const outline = this.add.image(cx, cy, CHIPOUT).setScale(base).setTint(0xffffff).setAlpha(0).setDepth(6);
     const txt = this.add
       .text(cx, cy, symbolFor(value), {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff',
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5).setDepth(7);
+    img.setInteractive({ useHandCursor: true });
 
+    const chip: Chip = { img, txt, outline, cx, cy, sub, base };
     img.on('pointerover', () => {
       if (this.busy || this.gameOver) return;
-      img.setTint(brighten(color, 42));
-      this.tweens.add({ targets: img, scaleX: base * 1.08, scaleY: base * 1.08, duration: 90 });
-      this.tweens.add({ targets: txt, scaleX: 1.08, scaleY: 1.08, duration: 90 });
+      this.hoverChip(chip, color, true);
     });
-    img.on('pointerout', () => {
-      img.setTint(color);
-      this.tweens.add({ targets: img, scaleX: base, scaleY: base, duration: 90 });
-      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 90 });
-    });
+    img.on('pointerout', () => this.hoverChip(chip, color, false));
     img.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
 
-    this.chips[y][x].set(value, { img, txt, cx, cy, sub, base });
+    this.chips[y][x].set(value, chip);
+  }
+
+  /** Hover feedback that mirrors the pygame FieldButton: brighten + a bright
+   *  white outline ring + a lift (scale up, rise, sit above neighbours). */
+  private hoverChip(chip: Chip, color: number, on: boolean): void {
+    const { img, txt, outline, base, cy } = chip;
+    this.tweens.killTweensOf([img, txt, outline]);
+    if (on) {
+      img.setTint(brighten(color, 56));
+      img.setDepth(20); outline.setDepth(21); txt.setDepth(22);
+      outline.setAlpha(0.9);
+      const hb = base * 1.09;
+      this.tweens.add({ targets: [img, outline], scaleX: hb, scaleY: hb, duration: 120, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: txt, scaleX: 1.09, scaleY: 1.09, duration: 120, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, outline, txt], y: cy - 6, duration: 120, ease: 'Quad.easeOut' });
+    } else {
+      img.setTint(color);
+      this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 120 });
+      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 120 });
+      this.tweens.add({ targets: outline, alpha: 0, duration: 120 });
+      this.tweens.add({
+        targets: [img, outline, txt], y: cy, duration: 120,
+        onComplete: () => { img.setDepth(5); outline.setDepth(6); txt.setDepth(7); },
+      });
+    }
+  }
+
+  /** Tear a candidate chip down reliably: kill any in-flight (hover) tweens and
+   *  detach input first, then a squash-and-pop, with a guaranteed destroy even
+   *  if the tween is interrupted — so a popped chip never lingers on screen. */
+  private destroyChip(chip: Chip, delay: number): void {
+    this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+    chip.img.disableInteractive();
+    chip.outline.setAlpha(0);
+    let done = false;
+    const kill = () => {
+      if (done) return;
+      done = true;
+      chip.img.destroy(); chip.txt.destroy(); chip.outline.destroy();
+    };
+    // Back.easeIn overshoots up before collapsing — the squash-and-pop
+    this.tweens.add({
+      targets: [chip.img, chip.txt, chip.outline], scaleX: 0, scaleY: 0, alpha: 0,
+      delay, duration: 200, ease: 'Back.easeIn', onComplete: kill,
+    });
+    this.time.delayedCall(delay + 360, kill);
   }
 
   private renderBig(y: number, x: number, n: number, animate: boolean): void {
     const map = this.chips[y][x];
-    for (const c of map.values()) { c.img.destroy(); c.txt.destroy(); }
+    for (const c of map.values()) {
+      this.tweens.killTweensOf([c.img, c.txt, c.outline]);
+      c.img.destroy(); c.txt.destroy(); c.outline.destroy();
+    }
     map.clear();
     const { cx, cy } = this.cellCenter(y, x);
     const color = rowColor(n);
     const base = this.cellSide / 160;
-    const img = this.add.image(cx, cy, BIG).setScale(animate ? base * 0.3 : base).setTint(color);
+    const start = animate ? base * 0.3 : base;
+    const img = this.add.image(cx, cy, BIG).setScale(start).setTint(color).setDepth(5);
+    const sheen = this.add.image(cx, cy, SHEEN).setScale(start).setDepth(6); // glossy top highlight
     const txt = this.add
       .text(cx, cy, symbolFor(n), {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(28, Math.round(this.cellSide * 0.46))}px`, color: '#ffffff',
       })
       .setOrigin(0.5)
-      .setScale(animate ? 0.3 : 1);
+      .setScale(animate ? 0.3 : 1)
+      .setDepth(7);
     this.bigObjs[y][x] = { img, txt };
     if (animate) {
-      this.tweens.add({ targets: img, scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, sheen], scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
       this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 340, ease: 'Back.easeOut' });
       this.fx.bigBurst(cx, cy, this.cellSide, this.cellSide, color);
     }
@@ -336,12 +395,7 @@ export class GameScene extends Phaser.Scene {
       if (!chip) continue;
       this.chips[s.y][s.x].delete(s.n);
       const delay = s.step * STEP_MS;
-      // Back.easeIn overshoots up before collapsing — the squash-and-pop
-      this.tweens.add({
-        targets: [chip.img, chip.txt], scaleX: 0, scaleY: 0, alpha: 0,
-        delay, duration: 200, ease: 'Back.easeIn',
-        onComplete: () => { chip.img.destroy(); chip.txt.destroy(); },
-      });
+      this.destroyChip(chip, delay);
       this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n)));
     }
 
@@ -368,10 +422,20 @@ export class GameScene extends Phaser.Scene {
 
   private registerWrong(y: number, x: number, n: number): void {
     this.mistakes += 1;
+    // Flood the WHOLE cell red + downward spray + ring + edge-vignette pulse
+    // (pygame wrong_click takes the full cell rect, not the small candidate).
+    const { cx, cy } = this.cellCenter(y, x);
+    this.fx.wrong(cx, cy, this.cellSide);
     const chip = this.chips[y][x].get(n);
-    const c = chip ? { cx: chip.cx, cy: chip.cy, s: chip.sub } : { ...this.cellCenter(y, x), s: this.cellSide * 0.5 };
-    this.fx.wrong(c.cx, c.cy, c.s, c.s);
-    if (chip) this.tweens.add({ targets: [chip.img, chip.txt], x: '+=5', duration: 45, yoyo: true, repeat: 3 });
+    if (chip) {
+      // an absolute-x jitter (not '+=5') so repeated wrong taps never drift
+      this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+      this.tweens.add({
+        targets: [chip.img, chip.txt, chip.outline], x: chip.cx + 5,
+        duration: 45, yoyo: true, repeat: 3,
+        onComplete: () => { chip.img.x = chip.cx; chip.txt.x = chip.cx; chip.outline.x = chip.cx; },
+      });
+    }
     this.lives -= 1;
     this.updateLives();
     const hp = this.heartPos(Math.max(0, this.lives));
@@ -390,8 +454,14 @@ export class GameScene extends Phaser.Scene {
         if (safe === undefined) continue;
         const chip = this.chips[y][x].get(safe);
         if (!chip) continue;
-        this.fx.ring(chip.cx, chip.cy, 0xf06060, 30, 520, 4);
-        this.tweens.add({ targets: [chip.img, chip.txt], scaleX: chip.base * 1.18, scaleY: chip.base * 1.18, duration: 200, yoyo: true, repeat: 2 });
+        this.fx.ring(chip.cx, chip.cy, 0xffd678, 34, 560, 4);
+        this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+        chip.outline.setAlpha(0.95);
+        this.tweens.add({ targets: [chip.img, chip.outline], scaleX: chip.base * 1.16, scaleY: chip.base * 1.16, duration: 200, yoyo: true, repeat: 2 });
+        this.tweens.add({ targets: chip.txt, scaleX: 1.16, scaleY: 1.16, duration: 200, yoyo: true, repeat: 2 });
+        // one-shot hop (pygame trigger_hop) so the indirectly-lit cell jumps
+        this.tweens.add({ targets: [chip.img, chip.txt, chip.outline], y: chip.cy - 12, duration: 220, yoyo: true, ease: 'Quad.easeOut' });
+        this.tweens.add({ targets: chip.outline, alpha: 0, delay: 760, duration: 320 });
         return;
       }
     }
@@ -528,7 +598,7 @@ export class GameScene extends Phaser.Scene {
     this.hideTooltip();
 
     if (won) this.fx.celebrate();
-    else { this.fx.shake(13, 480); this.fx.flash(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x962226, false, 600); }
+    else this.fx.defeat();
 
     this.time.delayedCall(won ? 260 : 220, () => this.showEndPanel(won));
   }
