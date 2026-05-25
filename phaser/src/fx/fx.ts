@@ -80,7 +80,7 @@ export class Fx {
           speed: { min: speed * 0.35, max: speed },
           angle: { min: aMin, max: aMax },
           gravityY: grav,
-          scale: { start: (size * 1.5) / 12, end: 0 },
+          scale: { start: (size * 2.2) / 18, end: 0 }, // chunk tex is 18px
           alpha: { start: 1, end: 0 },
           rotate: { min: 0, max: 360 },
           tint: [color, brighten(color, 35)],
@@ -97,7 +97,7 @@ export class Fx {
           speed: { min: speed * 0.4, max: speed * 1.15 },
           angle: { min: aMin, max: aMax },
           gravityY: grav * 0.45, // sparks hang/rise a touch — the fountain look
-          scale: { start: (size * 1.1) / 16, end: 0 },
+          scale: { start: (size * 2.2) / 32, end: 0 }, // dot tex is 32px
           alpha: { start: 1, end: 0 },
           tint: [brighten(color, 80), 0xffffff],
           blendMode: Phaser.BlendModes.ADD,
@@ -140,16 +140,16 @@ export class Fx {
 
   /** Candidate tile pop — small + snappy spark spray + ring. */
   smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 9, speed: 235, size: 3.6, life: [220, 440], sparkRatio: 0.55 });
-    this.ring(x, y, color, 30, 300, 3);
+    this.burst(x, y, color, { count: 11, speed: 250, size: 5.5, life: [240, 480], sparkRatio: 0.55 });
+    this.ring(x, y, color, 34, 320, 4);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom, shake. */
   bigBurst(x: number, y: number, w: number, h: number, color: number): void {
-    this.burst(x, y, color, { count: 24, speed: 460, size: 6.5, life: [560, 1040] });
-    this.ring(x, y, color, 96, 470, 6);
-    this.ring(x, y, 0xffffff, 60, 320, 3);
-    this.ring(x, y, color, 154, 620, 2, 24); // wide slow cascade "wave"
+    this.burst(x, y, color, { count: 26, speed: 470, size: 9, life: [560, 1060] });
+    this.ring(x, y, color, 98, 480, 7);
+    this.ring(x, y, 0xffffff, 62, 330, 4);
+    this.ring(x, y, color, 158, 640, 3, 24); // wide slow cascade "wave"
     this.flash(x, y, w, h, 0xffffff, true, 240);
     this.shake(7, 240);
   }
@@ -159,17 +159,17 @@ export class Fx {
   wrong(cx: number, cy: number, cell: number): void {
     this.flash(cx, cy, cell, cell, 0xe04040, false, 380);
     this.burst(cx, cy, 0xe85454, {
-      count: 14, speed: 285, size: 4.2, life: [350, 620],
+      count: 15, speed: 300, size: 5.5, life: [360, 640],
       angleMin: 22, angleMax: 158, gravity: 560, sparkRatio: 0.4,
     });
-    this.ring(cx, cy, 0xe85454, 74, 340, 4);
+    this.ring(cx, cy, 0xe85454, 78, 360, 5);
     this.vignettePulse(0xdc3737, 0.62);
     this.shake(9, 320);
   }
 
   heartBreak(x: number, y: number): void {
-    this.burst(x, y, 0xe44e5c, { count: 11, speed: 235, size: 4, life: [400, 720], gravity: 640 });
-    this.ring(x, y, 0xe44e5c, 34, 320, 3);
+    this.burst(x, y, 0xe44e5c, { count: 12, speed: 245, size: 5, life: [420, 740], gravity: 640 });
+    this.ring(x, y, 0xe44e5c, 36, 330, 4);
   }
 
   comboText(x: number, y: number, text: string): void {

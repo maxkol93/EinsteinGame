@@ -5,7 +5,7 @@ import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton } from '../ui/button';
-import { roundedTex, strokedRoundedTex, sheenRoundedTex } from '../ui/textures';
+import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 
 // Layout mirrors the pygame landscape build (view/window.py).
@@ -22,24 +22,45 @@ const STEP_MS = 130;
 const MAX_LIVES = 3;
 const DIFF = ['EASY', 'NORMAL', 'HARD'];
 const OP_SYMBOL: Record<string, string> = { '^': '↕', '<->': '↔', '...': '…' };
+const HOVER_SPREAD_MS = 200; // pygame HOVER_PROPAGATE_DELAY before twins light up
 
 let TILE = '';
-let BIG = '';
 let MINI = '';
-let SHEEN = '';
-let CHIPOUT = '';
+let SHADOW = '';
 
 interface Chip {
   img: Phaser.GameObjects.Image;
   txt: Phaser.GameObjects.Text;
   outline: Phaser.GameObjects.Image;
+  value: number;
   cx: number;
   cy: number;
   sub: number;
   base: number;
 }
+interface BigCell {
+  img: Phaser.GameObjects.Image;
+  txt: Phaser.GameObjects.Text;
+  outline: Phaser.GameObjects.Image;
+  value: number;
+  cx: number;
+  cy: number;
+  base: number;
+}
+interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; value: number; scale: number; }
 interface PressInfo { y: number; x: number; n: number; fired: boolean; }
-interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; rule: Rule; gx: number; gy: number; dim: boolean; }
+interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; }
+
+// A uniform "highlightable" used by the cross-hover system (board chips, big
+// cells and clue minis all reduce to this).
+interface Glowable {
+  img: Phaser.GameObjects.Image;
+  txt?: Phaser.GameObjects.Text;
+  outline?: Phaser.GameObjects.Image;
+  color: number;
+  scale: number;
+  homeY: number;
+}
 
 export class GameScene extends Phaser.Scene {
   private size = 4;
@@ -54,9 +75,17 @@ export class GameScene extends Phaser.Scene {
   private candCols = 2;
   private candRows = 2;
   private chips: Array<Array<Map<number, Chip>>> = [];
-  private bigObjs: Array<Array<{ img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text } | null>> = [];
+  private bigObjs: Array<Array<BigCell | null>> = [];
   private clueGroups: ClueGroup[] = [];
   private tooltip?: Phaser.GameObjects.Container;
+
+  // cross-highlight hover state
+  private liftShadow?: Phaser.GameObjects.Image;
+  private hoverSource: Chip | BigCell | ClueGroup | null = null;
+  private spreadTimer?: Phaser.Time.TimerEvent;
+  private directLiftChip: Chip | null = null;
+  private directGlow: Glowable[] = [];
+  private litSpread: Glowable[] = [];
 
   private timerText!: Phaser.GameObjects.Text;
   private hearts: Phaser.GameObjects.Text[] = [];
@@ -87,6 +116,10 @@ export class GameScene extends Phaser.Scene {
     this.hearts = [];
     this.clueGroups = [];
     this.tooltip = undefined;
+    this.hoverSource = null;
+    this.directLiftChip = null;
+    this.directGlow = [];
+    this.litSpread = [];
   }
 
   create(): void {
@@ -95,10 +128,8 @@ export class GameScene extends Phaser.Scene {
     this.fx = new Fx(this);
 
     TILE = roundedTex(this, 80, 80, 16);
-    BIG = roundedTex(this, 160, 160, 18);
     MINI = roundedTex(this, 64, 64, 12);
-    SHEEN = sheenRoundedTex(this, 160, 160, 18);
-    CHIPOUT = strokedRoundedTex(this, 80, 80, 16, 4);
+    SHADOW = shadowTex(this);
 
     try {
       const gen = generatePuzzle(this.size, this.difficulty, this.seed || undefined);
@@ -117,6 +148,9 @@ export class GameScene extends Phaser.Scene {
     this.candRows = Math.ceil(this.size / this.candCols);
     this.board = new PuzzleBoard(this.size, this.model.solution, this.model.definedStartCells);
 
+    this.liftShadow = this.add.image(0, 0, SHADOW).setAlpha(0).setDepth(19);
+
+    this.buildBackground();
     this.buildPanel();
     this.buildBoard();
     this.buildClues();
@@ -126,16 +160,40 @@ export class GameScene extends Phaser.Scene {
     if (this.board.isWon) this.time.delayedCall(250, () => this.finish(true));
   }
 
+  // ------------------------ background panels ------------------------
+
+  /** The left (menu/time/lives) and right (clues) panels: a brighten(bg,13)
+   *  backing, a lighter divider line, and a soft shadow strip cast onto the
+   *  board — mirrors window.py _draw_left_panel / _draw_rules_panel. */
+  private buildBackground(): void {
+    const panelColor = brighten(COLORS.bg, 13);
+    const divider = brighten(panelColor, 30);
+    const leftEdge = BX - 22; // left panel's right edge
+    const rightEdge = BX + SPAN + 22; // right panel's left edge
+
+    const g = this.add.graphics().setDepth(-10);
+    g.fillStyle(panelColor, 1);
+    g.fillRect(0, 0, leftEdge, GAME.height);
+    g.fillRect(rightEdge, 0, GAME.width - rightEdge, GAME.height);
+    g.lineStyle(1, divider, 1);
+    g.lineBetween(leftEdge, 0, leftEdge, GAME.height);
+    g.lineBetween(rightEdge, 0, rightEdge, GAME.height);
+
+    this.add.image(leftEdge, 0, shadowStripTex(this, false, GAME.height)).setOrigin(0, 0).setDepth(-9);
+    this.add.image(rightEdge - 16, 0, shadowStripTex(this, true, GAME.height)).setOrigin(0, 0).setDepth(-9);
+  }
+
   // --------------------------- left panel ---------------------------
 
   private buildPanel(): void {
     makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.scene.start('menu', this.menuData()), { fontSize: 19 });
 
-    this.add.text(PANEL / 2, 120, 'TIME', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
+    this.add.text(PANEL / 2, 120, 'T I M E', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     this.timerText = this.add
       .text(PANEL / 2, 152, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text })
       .setOrigin(0.5);
 
+    this.add.text(PANEL / 2, 188, 'L I V E S', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     for (let i = 0; i < MAX_LIVES; i++) {
       const { cx, cy } = this.heartPos(i);
       this.hearts.push(this.add.text(cx, cy, '♥', { fontFamily: FONT, fontSize: '32px', color: '#e05a68' }).setOrigin(0.5));
@@ -157,7 +215,7 @@ export class GameScene extends Phaser.Scene {
 
   private heartPos(i: number): { cx: number; cy: number } {
     const start = PANEL / 2 - ((MAX_LIVES - 1) * 38) / 2;
-    return { cx: start + i * 38, cy: 212 };
+    return { cx: start + i * 38, cy: 224 };
   }
 
   private updateLives(): void {
@@ -214,7 +272,11 @@ export class GameScene extends Phaser.Scene {
         if (cell.value !== null) {
           this.renderBig(y, x, cell.value, false);
         } else {
-          for (const slot of this.candSlots(y, x)) this.makeChip(y, x, slot.value, slot.cx, slot.cy, slot.sub);
+          // only render candidates the model still holds — a value already
+          // placed in this row was struck out, so its slot stays empty.
+          for (const slot of this.candSlots(y, x)) {
+            if (cell.candidates.includes(slot.value)) this.makeChip(y, x, slot.value, slot.cx, slot.cy, slot.sub);
+          }
         }
       }
     }
@@ -247,7 +309,7 @@ export class GameScene extends Phaser.Scene {
     const base = (sub - 3) / 80;
     const color = rowColor(value);
     const img = this.add.image(cx, cy, TILE).setScale(base).setTint(color).setDepth(5);
-    const outline = this.add.image(cx, cy, CHIPOUT).setScale(base).setTint(0xffffff).setAlpha(0).setDepth(6);
+    const outline = this.add.image(cx, cy, strokedRoundedTex(this, 80, 80, 16, 4)).setScale(base).setTint(0xffffff).setAlpha(0).setDepth(6);
     const txt = this.add
       .text(cx, cy, symbolFor(value), {
         fontFamily: FONT, fontStyle: 'bold',
@@ -256,40 +318,126 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5).setDepth(7);
     img.setInteractive({ useHandCursor: true });
 
-    const chip: Chip = { img, txt, outline, cx, cy, sub, base };
+    const chip: Chip = { img, txt, outline, value, cx, cy, sub, base };
     img.on('pointerover', () => {
       if (this.busy || this.gameOver) return;
-      this.hoverChip(chip, color, true);
+      this.hoverStart(chip, [value], { liftChip: chip });
     });
-    img.on('pointerout', () => this.hoverChip(chip, color, false));
+    img.on('pointerout', () => { if (this.hoverSource === chip) this.hoverEnd(); });
     img.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
 
     this.chips[y][x].set(value, chip);
   }
 
-  /** Hover feedback that mirrors the pygame FieldButton: brighten + a bright
-   *  white outline ring + a lift (scale up, rise, sit above neighbours). */
-  private hoverChip(chip: Chip, color: number, on: boolean): void {
-    const { img, txt, outline, base, cy } = chip;
+  // ---------------------- cross-highlight hover ----------------------
+
+  private chipGlow(c: Chip): Glowable {
+    return { img: c.img, txt: c.txt, outline: c.outline, color: rowColor(c.value), scale: c.base, homeY: c.cy };
+  }
+
+  private bigGlow(b: BigCell): Glowable {
+    return { img: b.img, txt: b.txt, outline: b.outline, color: rowColor(b.value), scale: b.base, homeY: b.cy };
+  }
+
+  private clueGlow(m: ClueMini): Glowable {
+    return { img: m.img, txt: m.txt, color: rowColor(m.value), scale: m.scale, homeY: m.img.y };
+  }
+
+  /** Every highlightable on screen whose value is in `values`. */
+  private glowablesForValues(values: number[]): Glowable[] {
+    const set = new Set(values);
+    const out: Glowable[] = [];
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        for (const [v, chip] of this.chips[y][x]) if (set.has(v)) out.push(this.chipGlow(chip));
+        const big = this.bigObjs[y][x];
+        if (big && set.has(big.value)) out.push(this.bigGlow(big));
+      }
+    }
+    for (const group of this.clueGroups) {
+      if (group.dim) continue; // crossed-out clue never highlights
+      for (const m of group.minis) if (set.has(m.value)) out.push(this.clueGlow(m));
+    }
+    return out;
+  }
+
+  /** Brighten + outline + (optional) one-shot hop on a highlightable. */
+  private glow(g: Glowable, on: boolean, hop: boolean): void {
+    if (!g.img.active) return;
+    const movers = [g.img, g.outline, g.txt].filter(Boolean) as Phaser.GameObjects.GameObject[];
+    const scalers = [g.img, g.outline].filter(Boolean) as Phaser.GameObjects.GameObject[];
+    this.tweens.killTweensOf(movers);
+    if (on) {
+      g.img.setTint(brighten(g.color, 56));
+      if (g.outline) g.outline.setAlpha(0.7);
+      this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
+      if (hop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+    } else {
+      g.img.setTint(g.color);
+      if (g.outline) this.tweens.add({ targets: g.outline, alpha: 0, duration: 120 });
+      this.tweens.add({ targets: scalers, scaleX: g.scale, scaleY: g.scale, duration: 120 });
+      this.tweens.add({ targets: movers, y: g.homeY, duration: 120 });
+    }
+  }
+
+  /** Directly-hovered candidate lifts: scale up, rise, drop shadow, outline. */
+  private liftChip(chip: Chip, on: boolean): void {
+    const { img, txt, outline, base, cx, cy, sub } = chip;
     this.tweens.killTweensOf([img, txt, outline]);
     if (on) {
-      img.setTint(brighten(color, 56));
+      img.setTint(brighten(rowColor(chip.value), 56));
       img.setDepth(20); outline.setDepth(21); txt.setDepth(22);
       outline.setAlpha(0.9);
-      const hb = base * 1.09;
+      const hb = base * 1.1;
       this.tweens.add({ targets: [img, outline], scaleX: hb, scaleY: hb, duration: 120, ease: 'Back.easeOut' });
-      this.tweens.add({ targets: txt, scaleX: 1.09, scaleY: 1.09, duration: 120, ease: 'Back.easeOut' });
-      this.tweens.add({ targets: [img, outline, txt], y: cy - 6, duration: 120, ease: 'Quad.easeOut' });
+      this.tweens.add({ targets: txt, scaleX: 1.1, scaleY: 1.1, duration: 120, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, outline, txt], y: cy - 7, duration: 120, ease: 'Quad.easeOut' });
+      if (this.liftShadow) {
+        this.tweens.killTweensOf(this.liftShadow);
+        this.liftShadow.setPosition(cx, cy + 7).setDisplaySize(sub * 1.32, sub * 1.32).setDepth(19);
+        this.tweens.add({ targets: this.liftShadow, alpha: 0.5, duration: 120 });
+      }
     } else {
-      img.setTint(color);
+      img.setTint(rowColor(chip.value));
       this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 120 });
       this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 120 });
       this.tweens.add({ targets: outline, alpha: 0, duration: 120 });
       this.tweens.add({
         targets: [img, outline, txt], y: cy, duration: 120,
-        onComplete: () => { img.setDepth(5); outline.setDepth(6); txt.setDepth(7); },
+        onComplete: () => { if (img.active) { img.setDepth(5); outline.setDepth(6); txt.setDepth(7); } },
       });
+      if (this.liftShadow) { this.tweens.killTweensOf(this.liftShadow); this.tweens.add({ targets: this.liftShadow, alpha: 0, duration: 120 }); }
     }
+  }
+
+  private hoverStart(source: Chip | BigCell | ClueGroup, values: number[], opts: { liftChip?: Chip; glowNow?: Glowable[] }): void {
+    this.hoverEnd();
+    this.hoverSource = source;
+    if (opts.liftChip) { this.directLiftChip = opts.liftChip; this.liftChip(opts.liftChip, true); }
+    if (opts.glowNow) { this.directGlow = opts.glowNow; for (const g of opts.glowNow) this.glow(g, true, false); }
+    // twins/linked cells fan out after a short delay (pygame propagation)
+    this.spreadTimer = this.time.delayedCall(HOVER_SPREAD_MS, () => {
+      const direct = new Set<Phaser.GameObjects.Image>();
+      if (this.directLiftChip) direct.add(this.directLiftChip.img);
+      for (const g of this.directGlow) direct.add(g.img);
+      this.litSpread = [];
+      for (const g of this.glowablesForValues(values)) {
+        if (direct.has(g.img)) continue;
+        this.glow(g, true, true);
+        this.litSpread.push(g);
+      }
+    });
+  }
+
+  private hoverEnd(): void {
+    this.spreadTimer?.remove();
+    this.spreadTimer = undefined;
+    if (this.directLiftChip) { this.liftChip(this.directLiftChip, false); this.directLiftChip = null; }
+    for (const g of this.directGlow) this.glow(g, false, false);
+    this.directGlow = [];
+    for (const g of this.litSpread) this.glow(g, false, false);
+    this.litSpread = [];
+    this.hoverSource = null;
   }
 
   /** Tear a candidate chip down reliably: kill any in-flight (hover) tweens and
@@ -324,8 +472,9 @@ export class GameScene extends Phaser.Scene {
     const color = rowColor(n);
     const base = this.cellSide / 160;
     const start = animate ? base * 0.3 : base;
-    const img = this.add.image(cx, cy, BIG).setScale(start).setTint(color).setDepth(5);
-    const sheen = this.add.image(cx, cy, SHEEN).setScale(start).setDepth(6); // glossy top highlight
+    // colour baked into the texture (gradient + thin highlight band), no tint
+    const img = this.add.image(cx, cy, bigCellTex(this, color)).setScale(start).setDepth(5);
+    const outline = this.add.image(cx, cy, strokedRoundedTex(this, 160, 160, 18, 5)).setScale(start).setTint(0xffffff).setAlpha(0).setDepth(6);
     const txt = this.add
       .text(cx, cy, symbolFor(n), {
         fontFamily: FONT, fontStyle: 'bold',
@@ -334,9 +483,18 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScale(animate ? 0.3 : 1)
       .setDepth(7);
-    this.bigObjs[y][x] = { img, txt };
+
+    const big: BigCell = { img, txt, outline, value: n, cx, cy, base };
+    this.bigObjs[y][x] = big;
+    img.setInteractive({ useHandCursor: true });
+    img.on('pointerover', () => {
+      if (this.busy || this.gameOver) return;
+      this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
+    });
+    img.on('pointerout', () => { if (this.hoverSource === big) this.hoverEnd(); });
+
     if (animate) {
-      this.tweens.add({ targets: [img, sheen], scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
       this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 340, ease: 'Back.easeOut' });
       this.fx.bigBurst(cx, cy, this.cellSide, this.cellSide, color);
     }
@@ -376,6 +534,7 @@ export class GameScene extends Phaser.Scene {
     if (this.busy || this.gameOver) return;
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
+    this.hoverEnd(); // drop any highlight before the board mutates
     const correct = this.board.isAnswer(y, x, n);
     if (isDefine ? !correct : correct) {
       this.registerWrong(y, x, n);
@@ -471,7 +630,7 @@ export class GameScene extends Phaser.Scene {
 
   private buildClues(): void {
     this.add
-      .text(CLUE_X + PANEL / 2, 24, 'CLUES', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
+      .text(CLUE_X + PANEL / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
       .setOrigin(0.5);
 
     const rules = [...this.model.displayableRules].sort((a, b) => {
@@ -496,6 +655,8 @@ export class GameScene extends Phaser.Scene {
 
   private makeClueGroup(rule: Rule, gx: number, gy: number): void {
     const objs: Phaser.GameObjects.GameObject[] = [];
+    const minis: ClueMini[] = [];
+    const miniScale = (RULE_CELL - 3) / 64;
     for (let j = 0; j < 3; j++) {
       const v = rule[j];
       const sx = gx + j * RULE_CELL + RULE_CELL / 2;
@@ -506,6 +667,7 @@ export class GameScene extends Phaser.Scene {
           .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '19px', color: '#ffffff' })
           .setOrigin(0.5);
         objs.push(img, t);
+        minis.push({ img, txt: t, value: v, scale: miniScale });
       } else {
         const t = this.add
           .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: palette.accent })
@@ -514,18 +676,26 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    const group: ClueGroup = { objs, rule, gx, gy, dim: false };
+    const group: ClueGroup = { objs, minis, rule, gx, gy, dim: false };
     this.clueGroups.push(group);
 
     const hit = this.add
       .rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0)
       .setOrigin(0, 0)
       .setInteractive({ useHandCursor: true });
-    hit.on('pointerover', () => this.showTooltip(group));
-    hit.on('pointerout', () => this.hideTooltip());
+    hit.on('pointerover', () => {
+      this.showTooltip(group);
+      if (this.gameOver || group.dim) return;
+      this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
+    });
+    hit.on('pointerout', () => {
+      this.hideTooltip();
+      if (this.hoverSource === group) this.hoverEnd();
+    });
     hit.on('pointerdown', () => {
       group.dim = !group.dim;
       group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
+      if (group.dim && this.hoverSource === group) this.hoverEnd();
     });
   }
 
@@ -594,6 +764,7 @@ export class GameScene extends Phaser.Scene {
   private finish(won: boolean): void {
     if (this.gameOver) return;
     this.gameOver = true;
+    this.hoverEnd();
     this.timerEvent?.remove();
     this.hideTooltip();
 

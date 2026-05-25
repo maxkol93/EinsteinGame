@@ -28,55 +28,113 @@ export function strokedRoundedTex(
   return key;
 }
 
+// Big, crisp round particle (sparks). Larger than the old 16px so a scaled-down
+// burst still reads as fat, visible circles rather than specks.
 export function dotTex(scene: Phaser.Scene): string {
   const key = 'fx_dot';
   if (scene.textures.exists(key)) return key;
   const g = scene.make.graphics({ x: 0, y: 0 }, false);
   g.fillStyle(0xffffff, 1);
-  g.fillCircle(8, 8, 8);
-  g.generateTexture(key, 16, 16);
+  g.fillCircle(16, 16, 16);
+  g.generateTexture(key, 32, 32);
   g.destroy();
   return key;
 }
 
+// Chunk particle — a fat rounded square that tumbles as it flies.
 export function chunkTex(scene: Phaser.Scene): string {
   const key = 'fx_chunk';
   if (scene.textures.exists(key)) return key;
   const g = scene.make.graphics({ x: 0, y: 0 }, false);
   g.fillStyle(0xffffff, 1);
-  g.fillRoundedRect(0, 0, 12, 12, 3);
-  g.generateTexture(key, 12, 12);
+  g.fillRoundedRect(0, 0, 18, 18, 5);
+  g.generateTexture(key, 18, 18);
   g.destroy();
   return key;
 }
 
-// A rounded-rect top sheen (white → transparent vertical gradient, clipped to
-// the rounded shape). Overlaid on a resolved big cell it gives the glossy
-// highlight pygame paints in ui._draw_demo_solved / window._render_cell.
-export function sheenRoundedTex(
-  scene: Phaser.Scene, w = 160, h = 160, radius = 18,
-): string {
-  const key = `sheen_${w}x${h}_${radius}`;
+const ch = (v: number, f: number): number => Math.max(0, Math.min(255, Math.round(v * f)));
+const rgb = (color: number): [number, number, number] => [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff];
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/**
+ * A resolved big cell baked in its own colour: a vertical gradient (lighter
+ * top → darker bottom, the top-light look pygame's _make_gradient_surface
+ * gives) plus a THIN soft highlight band slightly above centre — not a bright
+ * white top sheen. Drawn with the colour baked in, so the image takes no tint.
+ */
+export function bigCellTex(scene: Phaser.Scene, color: number, w = 160, h = 160, radius = 18): string {
+  const key = `bigcell_${(color & 0xffffff).toString(16)}_${w}x${h}_${radius}`;
   if (scene.textures.exists(key)) return key;
   const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
+  c.width = w; c.height = h;
   const ctx = c.getContext('2d')!;
-  const r = radius;
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.arcTo(w, 0, w, h, r);
-  ctx.arcTo(w, h, 0, h, r);
-  ctx.arcTo(0, h, 0, 0, r);
-  ctx.arcTo(0, 0, w, 0, r);
-  ctx.closePath();
+  roundRectPath(ctx, 0, 0, w, h, radius);
   ctx.clip();
-  const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, 'rgba(255,255,255,0.55)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.07)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
+  const [r, g, b] = rgb(color);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, `rgb(${ch(r, 1.24)},${ch(g, 1.24)},${ch(b, 1.24)})`);
+  grad.addColorStop(0.5, `rgb(${ch(r, 1.0)},${ch(g, 1.0)},${ch(b, 1.0)})`);
+  grad.addColorStop(1, `rgb(${ch(r, 0.62)},${ch(g, 0.62)},${ch(b, 0.62)})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  // thin highlight band just above the middle
+  const bandY = h * 0.40;
+  const bandH = h * 0.09;
+  const band = ctx.createLinearGradient(0, bandY - bandH, 0, bandY + bandH);
+  band.addColorStop(0, 'rgba(255,255,255,0)');
+  band.addColorStop(0.5, 'rgba(255,255,255,0.17)');
+  band.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = band;
+  ctx.fillRect(0, bandY - bandH, w, bandH * 2);
+  scene.textures.addCanvas(key, c);
+  return key;
+}
+
+// A 16px soft shadow strip a side panel casts onto the board (window.py
+// _make_shadow_strip). Alpha fades from the panel edge to nothing.
+export function shadowStripTex(
+  scene: Phaser.Scene, darkOnRight: boolean, h: number, w = 16,
+): string {
+  const key = `shadowstrip_${darkOnRight ? 'r' : 'l'}_${w}x${h}`;
+  if (scene.textures.exists(key)) return key;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, w, 0);
+  if (darkOnRight) {
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.30)');
+  } else {
+    g.addColorStop(0, 'rgba(0,0,0,0.30)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+  }
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
+  scene.textures.addCanvas(key, c);
+  return key;
+}
+
+// A soft blurred drop shadow for a lifted tile (pygame buttons.soft_shadow).
+export function shadowTex(scene: Phaser.Scene, w = 112, h = 112, radius = 18): string {
+  const key = `fx_shadow_${w}x${h}_${radius}`;
+  if (scene.textures.exists(key)) return key;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d')!;
+  ctx.filter = 'blur(8px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  roundRectPath(ctx, 16, 16, w - 32, h - 32, radius);
+  ctx.fill();
   scene.textures.addCanvas(key, c);
   return key;
 }

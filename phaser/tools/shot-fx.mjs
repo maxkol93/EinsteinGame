@@ -30,11 +30,11 @@ const hoverPt = await page.evaluate(() => {
 });
 if (hoverPt) {
   await page.mouse.move(hoverPt.x, hoverPt.y);
-  await page.waitForTimeout(160);
+  await page.waitForTimeout(330); // > HOVER_SPREAD_MS so twins + clues light up
   await page.screenshot({ path: 'tools/shot-hover.png' });
   console.log('hover captured');
   await page.mouse.move(60, 60); // unhover
-  await page.waitForTimeout(160);
+  await page.waitForTimeout(200);
 }
 
 // --- a WRONG move: pop the answer candidate (a mistake) ---
