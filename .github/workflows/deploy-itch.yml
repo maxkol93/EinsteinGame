@@ -52,7 +52,7 @@ jobs:
         run: |
           # --retry-all-errors so a transient DNS/connection blip to broth is retried
           curl -fSL --retry 6 --retry-all-errors --retry-delay 5 \
-            -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+            -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
           unzip -q butler.zip
           chmod +x butler
           ./butler -V
