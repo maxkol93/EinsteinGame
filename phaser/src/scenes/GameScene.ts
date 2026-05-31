@@ -8,6 +8,8 @@ import { makeButton } from '../ui/button';
 import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 import { audio } from '../audio/sound';
+import { stats, parTime } from '../model/stats';
+import { evaluate, achievementInfo } from '../model/achievements';
 
 // Layout mirrors the pygame landscape build (view/window.py).
 const SPAN = 615;
@@ -67,6 +69,12 @@ export class GameScene extends Phaser.Scene {
   private size = 4;
   private difficulty = 0;
   private seed = 0;
+  private isRetry = false;
+
+  // results filled in at finish(), read by showEndPanel()
+  private bestText: string | null = null;
+  private newRecord = false;
+  private freshBadges: string[] = [];
 
   private model!: FieldAndRules;
   private board!: PuzzleBoard;
@@ -104,10 +112,14 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
-  init(data: { size?: number; difficulty?: number; seed?: number }): void {
+  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean }): void {
     this.size = data?.size ?? 4;
     this.difficulty = data?.difficulty ?? 0;
     this.seed = data?.seed ?? 0;
+    this.isRetry = !!data?.retry;
+    this.bestText = null;
+    this.newRecord = false;
+    this.freshBadges = [];
     this.lives = MAX_LIVES;
     this.mistakes = 0;
     this.seconds = 0;
@@ -789,34 +801,118 @@ export class GameScene extends Phaser.Scene {
     this.timerEvent?.remove();
     this.hideTooltip();
 
+    this.recordResult(won);
+
     if (won) { this.fx.celebrate(); audio.play('win'); }
     else { this.fx.defeat(); audio.play('lose'); }
 
     this.time.delayedCall(won ? 260 : 220, () => this.showEndPanel(won));
   }
 
+  /** Persist the outcome + earn achievements, exactly like presenter.py's
+   *  _finish_round: a Retry never counts (no record, no streak, no badges). */
+  private recordResult(won: boolean): void {
+    if (this.isRetry) return; // a replay of the same board doesn't count
+    if (won) {
+      const prevBest = stats.recordWin(this.difficulty, this.size, this.seconds, true);
+      this.newRecord = prevBest === null || this.seconds < prevBest;
+      const best = stats.bestFor(this.difficulty, this.size);
+      this.bestText = best ? this.fmt(best) : null;
+      const fresh = stats.unlock(
+        evaluate({
+          won: true,
+          totalWins: stats.totalWins,
+          mistakes: this.mistakes,
+          seconds: this.seconds,
+          par: parTime(this.size, this.difficulty),
+          size: this.size,
+          difficulty: this.difficulty,
+          winStreak: stats.winStreak,
+          zen: false,
+        }),
+      );
+      this.freshBadges = fresh.map((id) => achievementInfo(id).name);
+    } else {
+      stats.recordLoss(this.difficulty, this.size);
+    }
+  }
+
   private showEndPanel(won: boolean): void {
-    this.add.rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0.62).setDepth(100);
+    const hasBadges = won && this.freshBadges.length > 0;
+    const bestLine = won
+      ? this.isRetry ? 'Retry — not recorded' : this.bestText ? `best ${this.bestText}` : ''
+      : '';
+
+    // Measure top-down, then centre the panel around the content so nothing
+    // collides with the buttons regardless of how many badges were earned.
+    const PAD = 34;
+    let h = PAD;
+    if (won && this.newRecord) h += 30;
+    h += 52; // title
+    h += 32; // subtitle
+    if (bestLine) h += 24;
+    if (hasBadges) h += 18 + 6 + this.freshBadges.length * 26;
+    h += 26; // gap before buttons
+    const btnBlock = 52 + 14 + 48;
+    h += btnBlock + PAD;
+
     const pw = 480;
-    const ph = 300;
+    const ph = h;
     const cx = GAME.width / 2;
-    const top = GAME.height / 2 - ph / 2;
-    this.add.image(cx, GAME.height / 2, roundedTex(this, pw, ph, 18)).setTint(COLORS.panel).setDepth(101);
+    const cyPanel = GAME.height / 2;
+    const top = cyPanel - ph / 2;
+
+    this.add.rectangle(cx, cyPanel, GAME.width, GAME.height, 0x000000, 0.62).setDepth(100);
+    this.add.image(cx, cyPanel, roundedTex(this, pw, ph, 18)).setTint(COLORS.panel).setDepth(101);
+
+    let y = top + PAD;
+
+    if (won && this.newRecord) {
+      const banner = this.add
+        .text(cx, y + 15, '★  NEW RECORD!  ★', { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#ffd678' })
+        .setOrigin(0.5).setDepth(102);
+      this.tweens.add({ targets: banner, scale: 1.08, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      y += 30;
+    }
 
     this.add
-      .text(cx, top + 54, won ? 'SOLVED!' : 'OUT OF LIVES', {
+      .text(cx, y + 26, won ? 'SOLVED!' : 'OUT OF LIVES', {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '42px', color: won ? '#ffe27a' : '#e05a68',
       })
       .setOrigin(0.5).setDepth(102);
+    y += 52;
+
     this.add
-      .text(cx, top + 104, won ? `Time ${this.fmt(this.seconds)}   ·   ${this.mistakes} mistakes` : 'Better luck on the next board', {
+      .text(cx, y + 16, won ? `Time ${this.fmt(this.seconds)}   ·   ${this.mistakes} mistakes` : 'Better luck on the next board', {
         fontFamily: FONT, fontSize: '20px', color: palette.accent,
       })
       .setOrigin(0.5).setDepth(102);
+    y += 32;
 
-    const b1 = makeButton(this, cx - 120, top + 176, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
-    const b2 = makeButton(this, cx + 120, top + 176, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed }), { fontSize: 20 });
-    const b3 = makeButton(this, cx, top + 242, 224, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
+    if (bestLine) {
+      this.add
+        .text(cx, y + 12, bestLine, { fontFamily: FONT, fontSize: '16px', color: palette.accent })
+        .setOrigin(0.5).setDepth(102);
+      y += 24;
+    }
+
+    if (hasBadges) {
+      this.add
+        .text(cx, y + 8, 'NEW BADGE', { fontFamily: FONT, fontStyle: 'bold', fontSize: '14px', color: '#ffd678' })
+        .setOrigin(0.5).setDepth(102);
+      y += 18 + 6;
+      for (const name of this.freshBadges) {
+        this.add
+          .text(cx, y + 13, `★  ${name}`, { fontFamily: FONT, fontSize: '18px', color: palette.text })
+          .setOrigin(0.5).setDepth(102);
+        y += 26;
+      }
+    }
+
+    const btnY = y + 26 + 26;
+    const b1 = makeButton(this, cx - 120, btnY, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
+    const b2 = makeButton(this, cx + 120, btnY, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true }), { fontSize: 20 });
+    const b3 = makeButton(this, cx, btnY + 52 / 2 + 14 + 48 / 2, 224, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
     [b1, b2, b3].forEach((b) => b.root.setDepth(102));
   }
 

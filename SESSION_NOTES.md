@@ -2,6 +2,42 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: stats, progression unlocks & achievements
+
+Ported the meta-progression layer (the casual-player hook) — stats, mode
+unlocks and badges. All localStorage-backed, faithful to the pygame models.
+
+- **Models (no Phaser deps):** `model/stats.ts` (port of `stats.py` — per
+  (difficulty×size) wins/losses/best-time, win streak, badge set; saved under
+  the **same key** the pygame web build used, `einsteingame_stats`, so a
+  browser save carries across versions; defensive field-by-field load).
+  `model/achievements.ts` (the 10 badges + `evaluate(ctx)`),
+  `model/progression.ts` (the unlock rules: 4×4/Easy always open; 3 wins in a
+  size open the next size; 3 wins in every size of a difficulty open the next),
+  `model/settings.ts` (the `unlock_all` debug flag). `stats` is a shared
+  singleton written through to storage.
+- **Menu:** size/difficulty buttons now render **locked** (dimmed + 🔒, a
+  notice on click) per progression; selecting a difficulty re-evaluates the
+  size locks. A progress strip (`Wins · Best streak · Badges n/10`) and a row
+  of 10 achievement stars (gold = earned, hover = name+desc). **U** toggles the
+  debug unlock-all (mirrors the pygame key).
+- **GameScene end:** `recordResult()` mirrors `presenter._finish_round` —
+  records the win/loss, advances the streak and grants achievements, **except
+  on a Retry** (the Retry button now passes `retry:true`, so a replay never
+  counts). The end panel grew a pulsing **NEW RECORD!** banner, a `best mm:ss`
+  line and a **NEW BADGE** list of freshly-earned badges; the panel auto-sizes
+  to its content so badges never collide with the buttons.
+- **Verified:** `npm run build` green (~355 KB gz), `npm run smoke` 270/270,
+  `npm run verify` plays through and now also asserts the win **persisted** to
+  localStorage (`easy_4` win + `first_win` badge). Screenshots confirm the
+  locked menu, progress strip + star track, and the NEW RECORD / NEW BADGE
+  end panel. (Also fixed `verify.mjs` to write screenshots next to itself, not
+  the CWD.)
+
+**Next (still not ported):** exact Daily/Weekly/Monthly (needs the CPython-MT
+RNG validated against `shared/daily_vectors.json`), Zen mode, the tutorial, and
+a fuller stats screen (the pygame per-mode milestone-star table).
+
 ## 2026-05-31 — Phaser: sound pass (WebAudio)
 
 Ported the audio layer — the Phaser build had **no sound** until now, and web

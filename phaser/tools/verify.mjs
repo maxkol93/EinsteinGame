@@ -2,6 +2,13 @@
 // Scale.FIT maps game coords 1:1 to page pixels (no letterbox math needed).
 // Usage: node tools/verify.mjs [http://localhost:4173]
 import { chromium } from 'playwright';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// Resolve screenshots next to this script, not the CWD — so `node
+// phaser/tools/verify.mjs` from the repo root still writes into phaser/tools.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const shot = (name) => join(HERE, name);
 
 const url = process.argv[2] || 'http://localhost:4173';
 const errors = [];
@@ -13,10 +20,10 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 await page.goto(url, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.game?.scene?.isActive('menu'), { timeout: 10000 });
 await page.waitForTimeout(600);
-await page.screenshot({ path: 'tools/shot-menu.png' });
+await page.screenshot({ path: shot('shot-menu.png') });
 console.log('menu rendered');
 
-await page.mouse.click(1295 / 2, 512); // PLAY
+await page.mouse.click(1295 / 2, 480); // PLAY
 await page.waitForFunction(() => window.game?.scene?.isActive('game'), { timeout: 10000 });
 await page.waitForTimeout(700);
 
@@ -41,7 +48,7 @@ const cg = await page.evaluate(() => {
   return g ? { x: g.gx + 57, y: g.gy + 19 } : null;
 });
 if (cg) { await page.mouse.move(cg.x, cg.y); await page.waitForTimeout(250); }
-await page.screenshot({ path: 'tools/shot-game.png' });
+await page.screenshot({ path: shot('shot-game.png') });
 await page.mouse.move(200, 400); // unhover
 
 // real pointer pop on a wrong candidate -> cascade
@@ -61,7 +68,7 @@ const chip = await page.evaluate(() => {
 if (chip) {
   await page.mouse.click(chip.x, chip.y);
   await page.waitForTimeout(140);
-  await page.screenshot({ path: 'tools/shot-pop.png' });
+  await page.screenshot({ path: shot('shot-pop.png') });
   await page.waitForTimeout(700);
   console.log('pointer pop + cascade ok');
 }
@@ -91,9 +98,22 @@ const result = await page.evaluate(() => {
   const s = window.game.scene.getScene('game');
   return { won: s.board.isWon, over: s.gameOver, count: s.board.definedCount, total: s.size * s.size };
 });
-await page.screenshot({ path: 'tools/shot-win.png' });
+await page.screenshot({ path: shot('shot-win.png') });
 console.log(`auto-solve: won=${result.won} over=${result.over} ${result.count}/${result.total}`);
 if (!result.won || !result.over) errors.push(`did not finish: ${JSON.stringify(result)}`);
+
+// the win must have persisted to localStorage (stats + first_win achievement)
+const saved = await page.evaluate(() => {
+  try {
+    const s = JSON.parse(localStorage.getItem('einsteingame_stats') || '{}');
+    return { easy4: s.modes?.easy_4?.levels ?? 0, badges: s.achievements || [] };
+  } catch {
+    return null;
+  }
+});
+if (!saved || saved.easy4 < 1) errors.push(`win not recorded in stats: ${JSON.stringify(saved)}`);
+else if (!saved.badges.includes('first_win')) errors.push(`first_win badge not granted: ${JSON.stringify(saved)}`);
+else console.log(`stats persisted: easy_4 wins=${saved.easy4}, badges=[${saved.badges.join(',')}]`);
 
 await browser.close();
 if (errors.length) { console.error('\nFAILURES:\n' + errors.join('\n')); process.exit(1); }
