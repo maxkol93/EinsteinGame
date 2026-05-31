@@ -2,6 +2,34 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: tutorial polish + menu continue/restart + block select
+
+Seven player-reported items:
+1. **Win particles now loop** — `fx.celebrate` keeps a continuous confetti rain
+   emitter + a periodic gold pop on a timer, on top of the one-shot burst;
+   `stopCelebrate()` tears it down (scene shutdown also clears it).
+2. **Tutorial hover/highlight/tooltips** — ported the game's cross-highlight +
+   tooltip system into `TutorialScene` (chip/big/clue `Glowable`s, spread glow,
+   `ruleSegments` tooltip at 0.7 alpha). Verified: hovering a clue lights the
+   linked chips/cells + shows the floating "… same column as …" tooltip.
+3. **Hold-level tap reminder** — on a block-0 hold-only level, the 6th stray tap
+   pops the `hold_to_define` reminder popup (counter resets per level).
+4. **Entry cell counts** 4-6-8-4-6-8 → **6-7-8-6-7-8** (`BLOCK0_CELLS`).
+5. **Three-in-a-row direction** — `trueClue` 'tri' takes a `triDir`; block 4
+   forces level 0 left-to-right and level 1 right-to-left so both are taught.
+6. **Menu continue/restart** (pygame's `finished` flag): the in-game MENU now
+   PAUSES the board and launches the menu over it (`bringToTop` — scenes render
+   in config order); the menu then shows **CONTINUE** + **New game** when a game
+   is paused, else a single **Play**. Continue resumes; New game stops+starts.
+   A finished board shuts down → menu shows only Play.
+7. **Tutorial block select** — the menu's TUTORIAL button opens a
+   BlockSelectOverlay (the 6 blocks + Back); picking one `startReplay`s it.
+
+Verified: `typecheck` clean, `tut-smoke` 420 + `smoke` 270 still 0 fails,
+`verify` green; screenshots confirm the continue menu, block select, and the
+tutorial hover+tooltip. (Headless full-win-rain shot timed out under throttled
+rAF — the loop is code-verified + celebrate runs error-free in verify.)
+
 ## 2026-05-31 — Phaser: full tutorial (6-block onboarding)
 
 Ported the entire onboarding from `model/tutorial.py` + the presenter/view

@@ -217,7 +217,7 @@ export class GameScene extends Phaser.Scene {
   // --------------------------- left panel ---------------------------
 
   private buildPanel(): void {
-    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.scene.start('menu', this.menuData()), { fontSize: 19 });
+    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
 
     this.add.text(PANEL / 2, 120, 'T I M E', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     this.timerText = this.add
@@ -1222,5 +1222,19 @@ export class GameScene extends Phaser.Scene {
 
   private menuData(): { size: number; difficulty: number } {
     return { size: this.size, difficulty: this.difficulty };
+  }
+
+  /** Leave to the menu. A live, unfinished board is PAUSED and the menu opens
+   *  over it (so Continue can resume it); a finished board is shut down (the
+   *  menu then only offers a fresh game). */
+  private toMenu(): void {
+    if (this.gameOver) {
+      this.scene.start('menu', this.menuData());
+    } else {
+      this.hoverEnd();
+      this.scene.pause();
+      this.scene.launch('menu', this.menuData());
+      this.scene.bringToTop('menu'); // scenes render in config order, not launch order
+    }
   }
 }

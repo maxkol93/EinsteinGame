@@ -120,7 +120,12 @@ function markerOf(clue: Rule): string {
   return typeof clue[1] === 'string' ? (clue[1] as string) : 'tri';
 }
 
-function trueClue(solution: number[][], marker: string): Rule {
+// triDir forces a three-in-a-row clue to read left-to-right ('lr') or
+// right-to-left ('rl'); undefined = random. Used so the "Three in a row" block
+// shows both reading directions at least once across its levels.
+type TriDir = 'lr' | 'rl' | undefined;
+
+function trueClue(solution: number[][], marker: string, triDir?: TriDir): Rule {
   if (marker === '^') {
     const x = randrange(TUT_SIZE);
     const [y1, y2] = sample(TUT_SIZE, 2);
@@ -140,9 +145,12 @@ function trueClue(solution: number[][], marker: string): Rule {
     const y2 = randrange(TUT_SIZE);
     return [solution[y1][x1], '...', solution[y2][x2]];
   }
-  // 'tri' — three columns in a row, left to right
+  // 'tri' — three consecutive columns, presented in the chosen reading order
   const ys = [randrange(TUT_SIZE), randrange(TUT_SIZE), randrange(TUT_SIZE)];
-  return [solution[ys[0]][0], solution[ys[1]][1], solution[ys[2]][2]];
+  const dir: TriDir = triDir ?? (Math.random() < 0.5 ? 'lr' : 'rl');
+  return dir === 'lr'
+    ? [solution[ys[0]][0], solution[ys[1]][1], solution[ys[2]][2]]
+    : [solution[ys[0]][2], solution[ys[1]][1], solution[ys[2]][0]];
 }
 
 function solverWins(rules: Rule[]): boolean {
@@ -192,7 +200,7 @@ function openCellsCount(nCells: number): Set<string> {
   return out;
 }
 
-const BLOCK0_CELLS = [4, 6, 8, 4, 6, 8];
+const BLOCK0_CELLS = [6, 7, 8, 6, 7, 8];
 
 function givenFromOpen(open: Set<string>): Array<[number, number]> {
   const given: Array<[number, number]> = [];
@@ -219,8 +227,9 @@ function generateEntry(level: number): TutorialLevel {
   let tapOk: boolean;
   let holdOk: boolean;
   if (level < 3) {
-    if (cellCount === 4) open = openCellsInRows(2);
-    else if (cellCount === 6) open = openCellsInRows(3);
+    // the cascade-friendly "2 per row" layout while it fits (6 cells = 3 rows);
+    // 7/8 cells spill into a free count layout
+    if (cellCount === 6) open = openCellsInRows(3);
     else open = openCellsCount(cellCount);
     tapOk = true; holdOk = false;
   } else {
@@ -245,13 +254,13 @@ function ruleEq(a: Rule, b: Rule): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-function makeClues(solution: number[][], block: number, count: number, open: Set<string>): Rule[] | null {
+function makeClues(solution: number[][], block: number, count: number, open: Set<string>, triDir?: TriDir): Rule[] | null {
   const markers = markersFor(block, count);
   const clues: Rule[] = [];
   for (const marker of markers) {
     let found = false;
     for (let i = 0; i < 60; i++) {
-      const clue = trueClue(solution, marker);
+      const clue = trueClue(solution, marker, triDir);
       if (clues.some((c) => ruleEq(c, clue))) continue;
       if (!clueIsUseful(solution, clue, open)) continue;
       clues.push(clue);
@@ -275,6 +284,9 @@ function cluesAllNeeded(defined: Rule[], clues: Rule[]): boolean {
 function generateLogic(block: number, level: number): TutorialLevel {
   const wantClues = CLUE_COUNT[level];
   const wantRows = level + 1;
+  // Three-in-a-row block: force level 0 to read left-to-right and level 1
+  // right-to-left, so both directions are taught; level 2 is free.
+  const triDir: TriDir = block === 4 ? (level === 0 ? 'lr' : level === 1 ? 'rl' : undefined) : undefined;
   let fallback: { solution: number[][]; defined: Rule[]; clues: Rule[] } | null = null;
   const strict = 800;
   for (let attempt = 0; attempt < 3200; attempt++) {
@@ -283,7 +295,7 @@ function generateLogic(block: number, level: number): TutorialLevel {
     const open = openCellsInRows(wantRows);
     const defined = defineRules(solution, givenFromOpen(open));
     if (solverWins(defined)) continue; // must not solve itself before a clue
-    const clues = makeClues(solution, block, wantClues, open);
+    const clues = makeClues(solution, block, wantClues, open, triDir);
     if (clues === null) continue;
     if (!solverWins([...defined, ...clues])) continue;
     if (cluesAllNeeded(defined, clues)) return makeLevel(block, level, solution, defined, clues);

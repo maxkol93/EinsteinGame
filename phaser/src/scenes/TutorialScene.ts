@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS, GAME, FONT, palette, rowColor, brighten, applyRenderScale } from '../config';
 import { PuzzleBoard, ChangeSet } from '../model/board';
-import { symbolFor } from '../model/decoder';
+import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton } from '../ui/button';
 import { roundedTex, strokedRoundedTex, bigCellTex } from '../ui/textures';
@@ -11,7 +11,7 @@ import { settings } from '../model/settings';
 import { stats } from '../model/stats';
 import {
   TutorialDirector, TutorialLevel, CompleteResult, TrackerRow, levelsInBlock,
-  GOAL_HINT,
+  GOAL_HINT, GESTURE_HOLD_TEXT,
 } from '../model/tutorial';
 import { TutorialPopup, TutorialAnim } from '../ui/tutorialPopup';
 
@@ -27,6 +27,7 @@ const CLUE_X = BX + SPAN + MARGIN;
 const RULE_CELL = 44;
 const STEP_MS = 140;
 const HOLD_MS = 350;
+const HOVER_SPREAD_MS = 200;
 const OP_SYMBOL: Record<string, string> = { '^': '↕', '<->': '↔', '...': '…' };
 
 const TITLE: Record<string, string> = {
@@ -38,8 +39,13 @@ interface Chip {
   img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image;
   value: number; cx: number; cy: number; sub: number; base: number;
 }
-interface BigCell { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; value: number; cx: number; cy: number; base: number; }
-interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; rule: Rule; dim: boolean; }
+interface BigCell { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image; value: number; cx: number; cy: number; base: number; }
+interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image; value: number; scale: number; }
+interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; }
+interface Glowable {
+  img: Phaser.GameObjects.Image; txt?: Phaser.GameObjects.Text; outline?: Phaser.GameObjects.Image;
+  tintBase: number; tintHi: number; scale: number; homeY: number; canHop: boolean;
+}
 
 export class TutorialScene extends Phaser.Scene {
   private dir!: TutorialDirector;
@@ -62,7 +68,15 @@ export class TutorialScene extends Phaser.Scene {
   private holdRing?: Phaser.GameObjects.Graphics;
   private holdTween?: Phaser.Tweens.Tween;
   private popup?: TutorialPopup;
+
+  // cross-highlight hover state
+  private hoverChip: Chip | null = null;
+  private litGlow: Glowable[] = [];
+  private spreadTimer?: Phaser.Time.TimerEvent;
+  private tooltip?: Phaser.GameObjects.Container;
+  private hoverGroup: ClueGroup | null = null;
   private lastResult?: CompleteResult; // for the headless verify to drive Continue
+  private misuseTaps = 0; // taps on a hold-only level → reminder after a few
 
   private tileTex = '';
   private miniTex = '';
@@ -87,6 +101,7 @@ export class TutorialScene extends Phaser.Scene {
     this.busy = false;
     this.finished = false;
     this.press = null;
+    this.misuseTaps = 0;
     this.clueGroups = [];
 
     this.tileTex = roundedTex(this, 80, 80, 16);
@@ -230,8 +245,8 @@ export class TutorialScene extends Phaser.Scene {
     const txt = this.add.text(cx, cy, symbolFor(value), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff' }).setOrigin(0.5).setDepth(7);
     img.setInteractive({ useHandCursor: true });
     const chip: Chip = { img, txt, outline, value, cx, cy, sub, base };
-    img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.lift(chip, true); });
-    img.on('pointerout', () => this.lift(chip, false));
+    img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(chip, [value]); });
+    img.on('pointerout', () => this.hoverEnd());
     img.on('pointerdown', (p: Phaser.Input.Pointer) => this.onDown(y, x, value, p));
     this.chips[y][x].set(value, chip);
   }
@@ -258,7 +273,151 @@ export class TutorialScene extends Phaser.Scene {
     }
   }
 
+  // -------------------- cross-highlight hover + tooltips --------------------
+
+  private chipGlow(c: Chip): Glowable {
+    const col = rowColor(c.value);
+    return { img: c.img, txt: c.txt, outline: c.outline, tintBase: col, tintHi: brighten(col, 56), scale: c.base, homeY: c.cy, canHop: true };
+  }
+  private bigGlow(b: BigCell): Glowable {
+    return { img: b.img, txt: b.txt, outline: b.outline, tintBase: 0xffffff, tintHi: 0xffffff, scale: b.base, homeY: b.cy, canHop: true };
+  }
+  private clueGlow(m: ClueMini): Glowable {
+    const col = rowColor(m.value);
+    return { img: m.img, txt: m.txt, outline: m.outline, tintBase: col, tintHi: brighten(col, 56), scale: m.scale, homeY: m.img.y, canHop: false };
+  }
+
+  private glowablesForValues(values: number[]): Glowable[] {
+    const set = new Set(values);
+    const out: Glowable[] = [];
+    for (let y = 0; y < this.size; y++) for (let x = 0; x < this.size; x++) {
+      for (const [v, chip] of this.chips[y][x]) if (set.has(v)) out.push(this.chipGlow(chip));
+      const big = this.bigObjs[y][x];
+      if (big && set.has(big.value)) out.push(this.bigGlow(big));
+    }
+    for (const group of this.clueGroups) {
+      if (group.dim) continue;
+      for (const m of group.minis) if (set.has(m.value)) out.push(this.clueGlow(m));
+    }
+    return out;
+  }
+
+  private glow(g: Glowable, on: boolean, hop: boolean): void {
+    if (!g.img.active) return;
+    const movers = [g.img, g.outline, g.txt].filter(Boolean) as Phaser.GameObjects.GameObject[];
+    const scalers = [g.img, g.outline].filter(Boolean) as Phaser.GameObjects.GameObject[];
+    this.tweens.killTweensOf(movers);
+    if (on) {
+      g.img.setTint(g.tintHi);
+      if (g.outline) g.outline.setAlpha(0.7);
+      this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
+      if (hop && g.canHop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+    } else {
+      g.img.setTint(g.tintBase);
+      if (g.outline) this.tweens.add({ targets: g.outline, alpha: 0, duration: 120 });
+      this.tweens.add({ targets: scalers, scaleX: g.scale, scaleY: g.scale, duration: 120 });
+      this.tweens.add({ targets: movers, y: g.homeY, duration: 120 });
+    }
+  }
+
+  private hoverStart(source: Chip | BigCell | ClueGroup, values: number[]): void {
+    this.hoverEnd();
+    const direct = new Set<Phaser.GameObjects.Image>();
+    if ('sub' in source) {
+      this.hoverChip = source;
+      this.lift(source, true);
+      direct.add(source.img);
+    } else if ('rule' in source) {
+      this.hoverGroup = source;
+      this.showTooltip(source);
+      if (this.finished || source.dim) { /* tooltip only */ } else {
+        for (const m of source.minis) { const g = this.clueGlow(m); this.glow(g, true, false); this.litGlow.push(g); direct.add(m.img); }
+      }
+    } else {
+      const g = this.bigGlow(source);
+      this.glow(g, true, false);
+      this.litGlow.push(g);
+      direct.add(source.img);
+    }
+    this.spreadTimer = this.time.delayedCall(HOVER_SPREAD_MS, () => {
+      let lit = false;
+      for (const g of this.glowablesForValues(values)) {
+        if (direct.has(g.img)) continue;
+        this.glow(g, true, true);
+        this.litGlow.push(g);
+        lit = true;
+      }
+      if (lit) audio.play('spread');
+    });
+  }
+
+  private hoverEnd(): void {
+    this.spreadTimer?.remove();
+    this.spreadTimer = undefined;
+    if (this.hoverChip) { this.lift(this.hoverChip, false); this.hoverChip = null; }
+    for (const g of this.litGlow) this.glow(g, false, false);
+    this.litGlow = [];
+    this.hideTooltip();
+    this.hoverGroup = null;
+  }
+
+  private showTooltip(group: ClueGroup): void {
+    this.hideTooltip();
+    const segs = ruleSegments(group.rule);
+    const tile = 26;
+    const fontSize = 16;
+    const pad = 12;
+    const gap = 7;
+    const tmp = this.add.text(0, 0, '', { fontFamily: FONT, fontSize: `${fontSize}px` }).setVisible(false);
+    type Tok = { kind: 'cell' | 'word'; val: string | number; w: number };
+    const toks: Tok[] = [];
+    for (const s of segs) {
+      if (s.kind === 'cell') toks.push({ kind: 'cell', val: s.value, w: tile });
+      else for (const word of s.value.split(' ')) { tmp.setText(word); toks.push({ kind: 'word', val: word, w: tmp.width }); }
+    }
+    const maxW = 260;
+    const lines: Tok[][] = [[]];
+    let lineW = 0;
+    for (const tk of toks) {
+      const add = tk.w + (lineW > 0 ? gap : 0);
+      if (lineW > 0 && lineW + add > maxW) { lines.push([]); lineW = tk.w; } else lineW += add;
+      lines[lines.length - 1].push(tk);
+    }
+    tmp.destroy();
+    const lineH = Math.max(tile, fontSize + 6) + 4;
+    const widths = lines.map((ln) => ln.reduce((a, t) => a + t.w, 0) + gap * Math.max(0, ln.length - 1));
+    const pw = Math.max(...widths) + pad * 2;
+    const ph = lineH * lines.length + pad * 2;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.7);
+    objs.push(bg);
+    lines.forEach((ln, li) => {
+      let x = pad;
+      const cy = pad + li * lineH + lineH / 2;
+      for (const tk of ln) {
+        if (tk.kind === 'cell') {
+          const v = tk.val as number;
+          objs.push(this.add.image(x + tile / 2, cy, this.miniTex).setDisplaySize(tile, tile).setTint(rowColor(v)));
+          objs.push(this.add.text(x + tile / 2, cy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: '#ffffff' }).setOrigin(0.5));
+        } else {
+          objs.push(this.add.text(x, cy, tk.val as string, { fontFamily: FONT, fontSize: `${fontSize}px`, color: palette.text }).setOrigin(0, 0.5));
+        }
+        x += tk.w + gap;
+      }
+    });
+    let tx = group.gx - 14 - pw;
+    if (tx < 8) tx = group.gx + RULE_CELL * 3 + 14;
+    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + RULE_CELL / 2 - ph / 2));
+    this.tooltip = this.add.container(tx, ty, objs).setDepth(80);
+  }
+
+  private hideTooltip(): void {
+    this.tooltip?.destroy();
+    this.tooltip = undefined;
+  }
+
   private destroyChip(chip: Chip, delay: number): void {
+    if (this.hoverChip === chip) this.hoverEnd();
     this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
     chip.img.disableInteractive();
     chip.outline.setAlpha(0);
@@ -270,6 +429,7 @@ export class TutorialScene extends Phaser.Scene {
 
   private renderBig(y: number, x: number, n: number, animate: boolean): void {
     const map = this.chips[y][x];
+    if (this.hoverChip && map.get(this.hoverChip.value) === this.hoverChip) this.hoverEnd();
     for (const c of map.values()) { this.tweens.killTweensOf([c.img, c.txt, c.outline]); c.img.destroy(); c.txt.destroy(); c.outline.destroy(); }
     map.clear();
     const { cx, cy } = this.cellCenter(y, x);
@@ -277,10 +437,15 @@ export class TutorialScene extends Phaser.Scene {
     const base = this.cellSide / 160;
     const start = animate ? base * 0.3 : base;
     const img = this.add.image(cx, cy, bigCellTex(this, color)).setScale(start).setDepth(5);
+    const outline = this.add.image(cx, cy, strokedRoundedTex(this, 160, 160, 18, 5)).setScale(start).setTint(0xffffff).setAlpha(0).setDepth(6);
     const txt = this.add.text(cx, cy, symbolFor(n), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(28, Math.round(this.cellSide * 0.46))}px`, color: '#ffffff' }).setOrigin(0.5).setScale(animate ? 0.3 : 1).setDepth(7);
-    this.bigObjs[y][x] = { img, txt, value: n, cx, cy, base };
+    const big: BigCell = { img, txt, outline, value: n, cx, cy, base };
+    this.bigObjs[y][x] = big;
+    img.setInteractive({ useHandCursor: true });
+    img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(big, [n]); });
+    img.on('pointerout', () => this.hoverEnd());
     if (animate) {
-      this.tweens.add({ targets: img, scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
       this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 440, ease: 'Back.easeOut' });
       this.fx.bigBurst(cx, cy, this.cellSide, this.cellSide, color);
     }
@@ -354,10 +519,17 @@ export class TutorialScene extends Phaser.Scene {
     if (this.busy || this.finished || this.popup) return;
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
+    this.hoverEnd();
     const lv = this.level;
 
-    // block 0 gesture gating: the un-taught gesture is a silent no-op nudge
-    if (lv.block === 0 && !isDefine && !lv.tapOk) { this.wrongFeedback(y, x, n, false); return; }
+    // block 0 gesture gating: the un-taught gesture is a silent no-op nudge —
+    // but on a hold-only level, a few taps earn a "hold the button" reminder.
+    if (lv.block === 0 && !isDefine && !lv.tapOk) {
+      this.wrongFeedback(y, x, n, false);
+      this.misuseTaps += 1;
+      if (this.misuseTaps === 6) this.openPopup({ text: GESTURE_HOLD_TEXT, buttonLabel: 'Got it', tag: 'TIP', animation: 'hold_to_define' });
+      return;
+    }
     if (lv.block === 0 && isDefine && !lv.holdOk) { this.wrongFeedback(y, x, n, false); return; }
 
     if (!lv.free) {
@@ -443,21 +615,33 @@ export class TutorialScene extends Phaser.Scene {
 
   private makeClueGroup(rule: Rule, gx: number, gy: number): void {
     const objs: Phaser.GameObjects.GameObject[] = [];
+    const minis: ClueMini[] = [];
+    const miniScale = (RULE_CELL - 4) / 64;
     for (let j = 0; j < 3; j++) {
       const v = rule[j];
       const sx = gx + j * RULE_CELL + RULE_CELL / 2;
       const sy = gy + RULE_CELL / 2;
       if (typeof v === 'number') {
-        objs.push(this.add.image(sx, sy, this.miniTex).setDisplaySize(RULE_CELL - 4, RULE_CELL - 4).setTint(rowColor(v)));
-        objs.push(this.add.text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#ffffff' }).setOrigin(0.5));
+        const img = this.add.image(sx, sy, this.miniTex).setDisplaySize(RULE_CELL - 4, RULE_CELL - 4).setTint(rowColor(v));
+        const outline = this.add.image(sx, sy, strokedRoundedTex(this, 64, 64, 12, 5)).setScale(miniScale).setTint(0xffffff).setAlpha(0);
+        const t = this.add.text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#ffffff' }).setOrigin(0.5);
+        objs.push(img, t); // outline NOT in objs (dim must not leave it visible)
+        minis.push({ img, txt: t, outline, value: v, scale: miniScale });
       } else {
         objs.push(this.add.text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '24px', color: palette.accent }).setOrigin(0.5));
       }
     }
-    const group: ClueGroup = { objs, rule, dim: false };
+    const group: ClueGroup = { objs, minis, rule, gx, gy, dim: false };
     this.clueGroups.push(group);
     const hit = this.add.rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0).setOrigin(0, 0).setInteractive({ useHandCursor: true });
-    hit.on('pointerdown', () => { group.dim = !group.dim; group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1)); });
+    hit.on('pointerover', () => { if (!this.popup) this.hoverStart(group, group.minis.map((m) => m.value)); });
+    hit.on('pointerout', () => { if (this.hoverGroup === group) this.hoverEnd(); });
+    hit.on('pointerdown', () => {
+      group.dim = !group.dim;
+      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
+      for (const m of group.minis) { this.tweens.killTweensOf([m.img, m.outline, m.txt]); m.outline.setAlpha(0); m.img.setScale(m.scale).setTint(rowColor(m.value)); m.txt.setScale(1); }
+      if (group.dim && this.hoverGroup === group) this.hoverEnd();
+    });
   }
 
   private valueSolved(n: number): boolean {
@@ -468,10 +652,11 @@ export class TutorialScene extends Phaser.Scene {
   private autoDimClues(): void {
     for (const group of this.clueGroups) {
       if (group.dim) continue;
-      if (group.rule.every((v) => typeof v !== 'number' || this.valueSolved(v))) {
-        group.dim = true;
-        group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(0.32));
-      }
+      if (!group.rule.every((v) => typeof v !== 'number' || this.valueSolved(v))) continue;
+      group.dim = true;
+      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(0.32));
+      for (const m of group.minis) { this.tweens.killTweensOf([m.img, m.outline, m.txt]); m.outline.setAlpha(0); m.img.setScale(m.scale).setTint(rowColor(m.value)); m.txt.setScale(1); }
+      if (this.hoverGroup === group) this.hoverEnd();
     }
   }
 

@@ -1,12 +1,13 @@
 import Phaser from 'phaser';
 import { COLORS, GAME, FONT, palette, applyRenderScale } from '../config';
 import { makeButton, BtnHandle } from '../ui/button';
+import { roundedTex } from '../ui/textures';
 import { audio } from '../audio/sound';
 import { stats } from '../model/stats';
 import { settings } from '../model/settings';
 import { sizeLocks, diffLocks, sizeUnlocked } from '../model/progression';
 import { ACHIEVEMENTS, achievementInfo } from '../model/achievements';
-import { TutorialDirector } from '../model/tutorial';
+import { TutorialDirector, BLOCK_NAMES } from '../model/tutorial';
 
 const SIZES = [4, 5, 6];
 const DIFFS = ['Easy', 'Normal', 'Hard'];
@@ -84,9 +85,19 @@ export class MenuScene extends Phaser.Scene {
       return b;
     });
 
-    makeButton(this, cx, 480, 260, 66, 'PLAY', () => this.play(), {
-      fontSize: 28, fill: COLORS.rows['4'], textColor: '#ffffff',
-    });
+    // If a game is paused in the background there's a board to resume, so offer
+    // Continue + New game (pygame's non-`finished` menu); otherwise a single
+    // Play (pygame's `finished` menu — only the path to a fresh board).
+    if (this.scene.isPaused('game')) {
+      makeButton(this, cx, 466, 300, 56, '▶  CONTINUE', () => this.continueGame(), {
+        fontSize: 24, fill: COLORS.rows['4'], textColor: '#ffffff',
+      });
+      makeButton(this, cx, 522, 300, 44, 'New game', () => this.play(), { fontSize: 18 });
+    } else {
+      makeButton(this, cx, 480, 260, 66, 'PLAY', () => this.play(), {
+        fontSize: 28, fill: COLORS.rows['4'], textColor: '#ffffff',
+      });
+    }
 
     this.add
       .text(
@@ -192,7 +203,15 @@ export class MenuScene extends Phaser.Scene {
       this.showNotice(SIZE_LOCK_MSG);
       return;
     }
+    // a fresh board replaces any paused one
+    if (this.scene.isPaused('game') || this.scene.isSleeping('game')) this.scene.stop('game');
     this.scene.start('game', { size: this.size, difficulty: this.difficulty, zen: settings.zen });
+  }
+
+  /** Resume the paused in-progress board. */
+  private continueGame(): void {
+    this.scene.resume('game');
+    this.scene.stop();
   }
 
   /** Zen toggle (top-left, mirroring the audio toggles): a calm, no-lives
@@ -219,12 +238,43 @@ export class MenuScene extends Phaser.Scene {
     const w = 156;
     const x = w / 2 + 24;
     const label = settings.tutorialDone ? '↺  TUTORIAL' : '▶  TUTORIAL';
-    makeButton(this, x, 88, w, 40, label, () => {
-      const d = new TutorialDirector(settings.tutorialBlocks);
-      if (settings.tutorialDone) d.restartAll(); // a full replay from block 0
-      this.registry.set('tutorialDirector', d);
-      this.scene.start('tutorial');
-    }, { fontSize: 15 });
+    makeButton(this, x, 88, w, 40, label, () => this.openBlockSelect(), { fontSize: 15 });
+  }
+
+  /** Pick a tutorial block to play/replay (port of pygame BlockSelectOverlay). */
+  private openBlockSelect(): void {
+    const cx = GAME.width / 2;
+    const cy = GAME.height / 2;
+    const pw = 440;
+    const rowH = 54;
+    const ph = 150 + BLOCK_NAMES.length * rowH + 70;
+    const top = cy - ph / 2;
+    const depth = 60;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+
+    const dim = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.6).setDepth(depth).setInteractive();
+    const panel = this.add.image(cx, cy, roundedTex(this, pw, ph, 22)).setTint(COLORS.panel).setDepth(depth + 1);
+    objs.push(dim, panel);
+    objs.push(this.add.text(cx, top + 40, 'TUTORIAL', { fontFamily: FONT, fontStyle: 'bold', fontSize: '30px', color: palette.text }).setOrigin(0.5).setLetterSpacing(4).setDepth(depth + 2));
+    objs.push(this.add.text(cx, top + 70, 'play or replay any block', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5).setDepth(depth + 2));
+
+    const handles: BtnHandle[] = [];
+    BLOCK_NAMES.forEach((name, i) => {
+      const b = makeButton(this, cx, top + 104 + i * rowH, pw - 60, rowH - 10, `${i + 1}.   ${name}`, () => {
+        const d = new TutorialDirector(settings.tutorialBlocks);
+        d.startReplay(i);
+        this.registry.set('tutorialDirector', d);
+        this.scene.start('tutorial');
+      }, { fontSize: 19 });
+      b.root.setDepth(depth + 2);
+      handles.push(b);
+    });
+    const back = makeButton(this, cx, top + ph - 44, pw - 60, 46, 'Back', () => {
+      objs.forEach((o) => o.destroy());
+      handles.forEach((h) => h.root.destroy());
+    }, { fontSize: 18, fill: COLORS.accent, textColor: '#1c1a1e' });
+    back.root.setDepth(depth + 2);
+    handles.push(back);
   }
 
   private showNotice(msg: string): void {

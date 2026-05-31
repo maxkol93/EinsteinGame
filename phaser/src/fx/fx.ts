@@ -30,6 +30,8 @@ export class Fx {
   private vignette: Phaser.GameObjects.Image;
   private vigHold = 0;
   private vigTween?: Phaser.Tweens.Tween | Phaser.Tweens.TweenChain;
+  private celebrateRain?: Phaser.GameObjects.Particles.ParticleEmitter;
+  private celebrateTimer?: Phaser.Time.TimerEvent;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -198,10 +200,47 @@ export class Fx {
   celebrate(): void {
     const cx = GAME.width / 2;
     const cy = GAME.height / 2;
+    // the one-shot burst — fires once, all at once
     this.ring(cx, cy, 0xffd678, 440, 820, 8);
     this.ring(cx, cy, 0xffffff, 320, 620, 4);
-    this.burst(cx, cy, 0xffe6a0, { count: 18, speed: 520, size: 6, life: [700, 1300], gravity: 420, sparkRatio: 0.7 });
-    this.confetti(52);
+    this.burst(cx, cy, 0xffe6a0, { count: 18, speed: 520, size: 6, life: [700, 1300], gravity: 420 });
+    this.confetti(60); // initial fall
+
+    // continuous confetti rain — keeps falling for as long as the win screen
+    // is up (auto-cleared on scene shutdown, or via stopCelebrate()).
+    const colors = [0xa87377, 0xa5674c, 0xa58949, 0x788966, 0x5c7476, 0x6c5161, 0xffe282, 0xffffff];
+    this.celebrateRain = this.scene.add
+      .particles(0, 0, this.chunk, {
+        x: { min: 0, max: GAME.width },
+        y: { min: -40, max: -8 },
+        lifespan: 3200,
+        speedY: { min: 90, max: 220 },
+        speedX: { min: -60, max: 60 },
+        gravityY: 60,
+        scale: { min: 0.6, max: 1.5 },
+        rotate: { min: 0, max: 360 },
+        tint: colors,
+        frequency: 90, // emit a couple every 90ms → a steady fall
+        quantity: 2,
+      })
+      .setDepth(95);
+    // every so often a fresh gold pop bursts at a random spot near the top
+    this.celebrateTimer = this.scene.time.addEvent({
+      delay: 850, loop: true,
+      callback: () => {
+        const px = GAME.width * (0.2 + 0.6 * ((this.scene.time.now / 850) % 1));
+        this.burst(px, GAME.height * 0.32, 0xffe6a0, { count: 10, speed: 360, size: 5, life: [700, 1200], gravity: 360 });
+      },
+    });
+  }
+
+  /** Stop the looping win celebration (rain + periodic pops). Safe to call when
+   *  none is running. */
+  stopCelebrate(): void {
+    this.celebrateRain?.destroy();
+    this.celebrateRain = undefined;
+    this.celebrateTimer?.remove();
+    this.celebrateTimer = undefined;
   }
 
   // ---- red screen-edge vignette (replaces the old centre red rectangle) ----
