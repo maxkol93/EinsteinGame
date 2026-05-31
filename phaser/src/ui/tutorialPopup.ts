@@ -309,7 +309,10 @@ export class TutorialPopup {
   }
 
   private wrap(text: string, maxW: number): string[] {
-    const probe = this.scene.add.text(0, 0, '', { fontFamily: FONT, fontSize: '18px' }).setVisible(false);
+    // measure at the SAME size the lines are rendered (18*F) — on mobile F>1, so
+    // probing at a fixed 18px under-counted width and the text spilled past the
+    // panel. Now the wrap matches the real glyphs and the panel grows to fit.
+    const probe = this.scene.add.text(0, 0, '', { fontFamily: FONT, fontSize: `${Math.round(18 * F)}px` }).setVisible(false);
     const words = text.split(' ');
     const lines: string[] = [];
     let cur = '';

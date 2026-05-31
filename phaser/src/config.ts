@@ -46,10 +46,26 @@ function detectPortrait(): boolean {
 export const PORTRAIT = detectPortrait();
 
 // Canvas: landscape mirrors the pygame side-panel build (left panel, 615px
-// board, right clue panel). Portrait uses a tall ~9:19 aspect close to real
-// phones (so Scale.FIT barely letterboxes) and a narrower 560px design width so
-// elements aren't shrunk into illegibility by the fit-scale.
-export const GAME = PORTRAIT ? { width: 560, height: 1180 } : { width: 1295, height: 735 };
+// board, right clue panel). Portrait uses a 560px design width (so elements
+// aren't shrunk into illegibility by the fit-scale) and a height derived from
+// the REAL device aspect — so Scale.FIT fills the full width edge-to-edge
+// (no grey side bars / pillarboxing) instead of assuming a fixed 19.5:9. The
+// aspect is clamped to a sane band so the menu/clue layouts still fit; players
+// who tap itch's fullscreen button get an exact match (zero bars).
+function portraitDims(): { width: number; height: number } {
+  const width = 560;
+  let aspect = 2.0;
+  try {
+    if (typeof window !== 'undefined' && window.innerWidth > 0) {
+      aspect = window.innerHeight / window.innerWidth;
+    }
+  } catch {
+    /* keep default */
+  }
+  aspect = Math.min(2.16, Math.max(1.8, aspect)); // ~16:9 … 19.5:9
+  return { width, height: Math.round(width * aspect) };
+}
+export const GAME = PORTRAIT ? portraitDims() : { width: 1295, height: 735 };
 
 // Supersample factor: the game logic/layout stays in GAME.width×GAME.height
 // coords, but the actual render buffer is RENDER_SCALE× bigger and each scene's

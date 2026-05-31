@@ -60,6 +60,7 @@ interface BigCell {
 interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image; value: number; scale: number; }
 interface PressInfo { y: number; x: number; n: number; fired: boolean; }
 interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; }
+interface HintTarget { chip: Chip; group: ClueGroup | null; reason: string; }
 
 // A uniform "highlightable" used by the cross-hover system (board chips, big
 // cells and clue minis all reduce to this). tintBase/tintHi are the rest/hover
@@ -130,6 +131,8 @@ export class GameScene extends Phaser.Scene {
   private hintBtn?: BtnHandle;
   private armed: { y: number; x: number; n: number } | null = null;
   private armedCleanup?: () => void;
+  // touch tap-to-select on a clue: the highlighted (but not yet dimmed) clue
+  private armedClue: ClueGroup | null = null;
 
   constructor() {
     super('game');
@@ -683,7 +686,7 @@ export class GameScene extends Phaser.Scene {
     this.armed = { y, x, n };
     const g = this.add.graphics().setDepth(24);
     const r = chip.sub * 0.72;
-    const prompt = this.add.text(chip.cx, chip.cy - chip.sub * 0.9, 'tap again', { fontFamily: FONT, fontSize: '12px', color: palette.text, backgroundColor: '#1c1a1ecc', padding: { x: 5, y: 2 } }).setOrigin(0.5).setDepth(26);
+    const prompt = this.add.text(chip.cx, chip.cy - chip.sub * 1.05, 'tap again', { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(19, Math.round(chip.sub * 0.42))}px`, color: palette.text, backgroundColor: '#1c1a1edd', padding: { x: 9, y: 5 } }).setOrigin(0.5).setDepth(26);
     const tween = this.tweens.addCounter({
       from: 0.4, to: 1, duration: 480, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
       onUpdate: (tw) => { const a = tw.getValue() ?? 1; g.clear(); g.lineStyle(3, COLORS.accent, a); g.strokeRoundedRect(chip.cx - r, chip.cy - r, r * 2, r * 2, 8); },
@@ -752,6 +755,7 @@ export class GameScene extends Phaser.Scene {
     this.clearHint(); // any move dismisses the hint highlight
     this.resetIdle(); // a move restarts the idle-hint countdown
     this.hoverEnd(); // drop any highlight before the board mutates
+    this.clearClueHighlight(); // and any touch clue highlight
     const correct = this.board.isAnswer(y, x, n);
     if (isDefine ? !correct : correct) {
       this.registerWrong(y, x, n);
@@ -877,15 +881,17 @@ export class GameScene extends Phaser.Scene {
     return values.every((v) => typeof v !== 'number' || this.valueSolved(v));
   }
 
-  /** A still-active candidate the clue forbids, with the clue as the reason. */
-  private ruleEliminates(group: ClueGroup): { chip: Chip; group: ClueGroup } | null {
+  /** A still-active candidate the clue forbids, with the clue as the reason —
+   *  plus a plain-language `reason` string explaining WHY it can be popped. */
+  private ruleEliminates(group: ClueGroup): HintTarget | null {
+    const sym = (v: number): string => symbolFor(v);
     const [a, b, c] = group.rule;
     if (b === '^' && typeof a === 'number' && typeof c === 'number') {
       const ya = Math.floor(a / 10) - 1;
       const yc = Math.floor(c / 10) - 1;
       for (let x = 0; x < this.size; x++) {
-        if (!this.valueAtCell(ya, x, a)) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group }; }
-        if (!this.valueAtCell(yc, x, c)) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group }; }
+        if (!this.valueAtCell(ya, x, a)) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group, reason: `${sym(c)} shares a column with ${sym(a)} (clue ↕), but ${sym(a)} is already ruled out of this column — so ${sym(c)} can't be here.` }; }
+        if (!this.valueAtCell(yc, x, c)) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group, reason: `${sym(a)} shares a column with ${sym(c)} (clue ↕), but ${sym(c)} is already ruled out of this column — so ${sym(a)} can't be here.` }; }
       }
       return null;
     }
@@ -895,11 +901,11 @@ export class GameScene extends Phaser.Scene {
       for (let x = 0; x < this.size; x++) {
         if (this.valueAtCell(ya, x, a)) {
           const has = (x > 0 && this.valueAtCell(yc, x - 1, c)) || (x < this.size - 1 && this.valueAtCell(yc, x + 1, c));
-          if (!has) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group }; }
+          if (!has) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group, reason: `${sym(a)} must be next to ${sym(c)} (clue ↔), but neither neighbouring column can hold ${sym(c)} — so ${sym(a)} can't be here.` }; }
         }
         if (this.valueAtCell(yc, x, c)) {
           const has = (x > 0 && this.valueAtCell(ya, x - 1, a)) || (x < this.size - 1 && this.valueAtCell(ya, x + 1, a));
-          if (!has) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group }; }
+          if (!has) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group, reason: `${sym(c)} must be next to ${sym(a)} (clue ↔), but neither neighbouring column can hold ${sym(a)} — so ${sym(c)} can't be here.` }; }
         }
       }
       return null;
@@ -910,8 +916,8 @@ export class GameScene extends Phaser.Scene {
       if (!aCols.length || !cCols.length) return null;
       const maxC = Math.max(...cCols);
       const minC = Math.min(...cCols);
-      for (const x of aCols) if (x >= maxC) { const btn = this.candidateButton(Math.floor(a / 10) - 1, x, a); if (btn) return { chip: btn, group }; }
-      for (const x of cCols) if (x <= minC && x <= Math.min(...aCols)) { const btn = this.candidateButton(Math.floor(c / 10) - 1, x, c); if (btn) return { chip: btn, group }; }
+      for (const x of aCols) if (x >= maxC) { const btn = this.candidateButton(Math.floor(a / 10) - 1, x, a); if (btn) return { chip: btn, group, reason: `${sym(a)} must be left of ${sym(c)} (clue …), but there's no room for ${sym(c)} further right — so ${sym(a)} can't be here.` }; }
+      for (const x of cCols) if (x <= minC && x <= Math.min(...aCols)) { const btn = this.candidateButton(Math.floor(c / 10) - 1, x, c); if (btn) return { chip: btn, group, reason: `${sym(c)} must be right of ${sym(a)} (clue …), but there's no room for ${sym(a)} further left — so ${sym(c)} can't be here.` }; }
       return null;
     }
     // triple — lean on the known answer: ring an active candidate the solution
@@ -921,14 +927,14 @@ export class GameScene extends Phaser.Scene {
         const y = Math.floor(v / 10) - 1;
         for (let x = 0; x < this.size; x++) {
           const btn = this.candidateButton(y, x, v);
-          if (btn && this.board.solution[y][x] !== v) return { chip: btn, group };
+          if (btn && this.board.solution[y][x] !== v) return { chip: btn, group, reason: `${sym(v)} here would break the clue ${sym(a)} ${sym(b)} ${sym(c)} — it can't be the answer for this cell.` };
         }
       }
     }
     return null;
   }
 
-  private findHintTarget(): { chip: Chip; group: ClueGroup | null } | null {
+  private findHintTarget(): HintTarget | null {
     for (const group of this.clueGroups) {
       if (group.dim) continue;
       if (this.ruleSatisfied(group.rule)) continue;
@@ -944,7 +950,7 @@ export class GameScene extends Phaser.Scene {
         const n = cell.candidates.find((v) => v !== correct);
         if (n === undefined) continue;
         const chip = this.chips[y][x].get(n);
-        if (chip) return { chip, group: null };
+        if (chip) return { chip, group: null, reason: `${symbolFor(n)} can't be the answer for this cell — it's safe to pop.` };
       }
     }
     return null;
@@ -979,7 +985,8 @@ export class GameScene extends Phaser.Scene {
     this.clearHint();
     const target = this.findHintTarget();
     if (!target) return;
-    const { chip, group } = target;
+    const { chip, group, reason } = target;
+    const hideMsg = this.showHintMessage(reason);
 
     // using the hint hides the button again and restarts the idle countdown
     // (so it re-appears after another idle window). Zen keeps it always up.
@@ -1021,6 +1028,7 @@ export class GameScene extends Phaser.Scene {
 
     this.hintActive = {
       restore: () => {
+        hideMsg();
         pulse.stop();
         pulseTxt.stop();
         frameTween.stop();
@@ -1034,6 +1042,23 @@ export class GameScene extends Phaser.Scene {
         for (const g of clueGlows) this.glow(g, false, false);
       },
     };
+  }
+
+  /** A banner explaining WHY the hinted candidate can be popped (port of the
+   *  pygame hint reasoning text). Sits along the bottom and is cleared together
+   *  with the hint highlight. */
+  private showHintMessage(text: string): () => void {
+    const wrap = (PORTRAIT ? GAME.width : SPAN) - 52;
+    const txt = this.add.text(0, 0, text, { fontFamily: FONT, fontSize: PORTRAIT ? '20px' : '17px', color: '#ffe9c2', align: 'center', wordWrap: { width: wrap } }).setOrigin(0.5);
+    const pw = Math.ceil(txt.width + 40);
+    const ph = Math.ceil(txt.height + 26);
+    const bg = this.add.image(0, 0, roundedTex(this, pw, ph, 14)).setTint(brighten(COLORS.panel, 8)).setAlpha(0.97);
+    const border = this.add.image(0, 0, strokedRoundedTex(this, pw, ph, 14, 2)).setTint(0xffd678).setAlpha(0.8);
+    const x = PORTRAIT ? GAME.width / 2 : BX + SPAN / 2;
+    const y = GAME.height - ph / 2 - 16;
+    const cont = this.add.container(x, y, [bg, border, txt]).setDepth(85).setScale(0.94);
+    this.tweens.add({ targets: cont, scale: 1, duration: 180, ease: 'Back.easeOut' });
+    return () => { this.tweens.killTweensOf(cont); cont.destroy(); };
   }
 
   // --------------------------- clues ---------------------------
@@ -1121,19 +1146,52 @@ export class GameScene extends Phaser.Scene {
       .rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0)
       .setOrigin(0, 0)
       .setInteractive({ useHandCursor: true });
+    // Mouse: hover cross-highlights, click dims. Touch (tap-to-select): the
+    // pointerover/out hover would flicker (a tap fires over→down→up→out), so we
+    // gate it off and drive everything from the tap instead — 1st tap lights the
+    // board, 2nd tap on the same clue crosses it out. No "tap again" prompt.
     hit.on('pointerover', () => {
+      if (settings.touch) return;
       this.showTooltip(group);
       if (this.gameOver || group.dim) return;
       this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
     });
     hit.on('pointerout', () => {
+      if (settings.touch) return;
       this.hideTooltip();
       if (this.hoverSource === group) this.hoverEnd();
     });
     hit.on('pointerdown', () => {
+      if (settings.touch) { this.tapClue(group); return; }
       if (group.dim) this.undimGroup(group);
       else this.dimGroup(group);
     });
+  }
+
+  /** Touch tap on a clue: 1st tap → cross-highlight its values on the board;
+   *  2nd tap on the same clue → dim (cross out) the clue; a tap on a dimmed clue
+   *  → bring it back. Tapping a different clue moves the highlight there. */
+  private tapClue(group: ClueGroup): void {
+    if (this.gameOver) return;
+    if (group.dim) { this.undimGroup(group); return; }
+    if (this.armedClue && this.armedClue !== group) { this.clearClueHighlight(); }
+    if (this.armedClue === group) {
+      this.dimGroup(group); // dimGroup clears the glow + hover for this group
+      this.hideTooltip();
+      this.armedClue = null;
+      return;
+    }
+    this.armedClue = group;
+    this.showTooltip(group);
+    this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
+  }
+
+  /** Drop any touch clue highlight (board glow + tooltip). */
+  private clearClueHighlight(): void {
+    if (!this.armedClue) return;
+    if (this.hoverSource === this.armedClue) this.hoverEnd();
+    this.hideTooltip();
+    this.armedClue = null;
   }
 
   /** True once value `n` sits in a solved big cell (board state, not the

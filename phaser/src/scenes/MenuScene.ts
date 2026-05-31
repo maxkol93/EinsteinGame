@@ -69,75 +69,80 @@ export class MenuScene extends Phaser.Scene {
   }
 
   /** Single-column portrait/mobile menu (560-wide design → near 1:1 on a phone,
-   *  so normal-ish sizes stay legible). */
+   *  so normal-ish sizes stay legible). Laid out by an exact-placement engine:
+   *  each block declares its height + the clear gap above it, so a label can
+   *  never overlap the row beneath it. Spare (or short) vertical space is spread
+   *  across the gaps so the column fits any (dynamic) portrait height. */
   private buildPortrait(): void {
     const cx = GAME.width / 2;
     const bw = GAME.width - 48;
-    const S = 1.25; // slider/toggle size scale
-    const lbl = (t: string, yy: number) => this.add.text(cx, yy, t, { fontFamily: FONT, fontSize: '17px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(1);
+    const S = 1.3; // slider/toggle size scale
     const cw = (bw - 28) / 3; // three-across column width
-    let y = 188;
+    const xAt = (i: number): number => cx - bw / 2 + cw / 2 + i * (cw + 14);
+    const lbl = (t: string, cy: number): void => { this.add.text(cx, cy, t, { fontFamily: FONT, fontSize: '18px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(1); };
 
-    lbl('BOARD SIZE', y);
-    y += 38;
-    this.sizeBtns = SIZES.map((s, i) => {
-      const x = cx - bw / 2 + cw / 2 + i * (cw + 14);
-      const b = makeButton(this, x, y, cw, 64, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size, fontSize: 26 });
-      const lock = this.add.text(x + cw / 2 - 20, y, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
-      lock.setDepth(b.root.depth + 1);
-      this.sizeLockMarks.push(lock);
-      return b;
-    });
-    y += 94;
+    interface Block { h: number; gap: number; render: (cy: number) => void }
+    const blocks: Block[] = [];
+    const push = (h: number, gap: number, render: (cy: number) => void): void => { blocks.push({ h, gap, render }); };
 
-    lbl('DIFFICULTY', y);
-    y += 38;
-    this.diffBtns = DIFFS.map((d, i) => {
-      const x = cx - bw / 2 + cw / 2 + i * (cw + 14);
-      const b = makeButton(this, x, y, cw, 64, d, () => this.selectDiff(i), { selected: i === this.difficulty, fontSize: 21 });
-      const lock = this.add.text(x + cw / 2 - 20, y, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
-      lock.setDepth(b.root.depth + 1);
-      this.diffLockMarks.push(lock);
-      return b;
+    push(22, 22, (cy) => lbl('BOARD SIZE', cy));
+    push(62, 12, (cy) => {
+      this.sizeBtns = SIZES.map((s, i) => {
+        const x = xAt(i);
+        const b = makeButton(this, x, cy, cw, 62, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size, fontSize: 26 });
+        const lock = this.add.text(x + cw / 2 - 20, cy, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
+        lock.setDepth(b.root.depth + 1);
+        this.sizeLockMarks.push(lock);
+        return b;
+      });
     });
-    y += 102;
+    push(22, 22, (cy) => lbl('DIFFICULTY', cy));
+    push(62, 12, (cy) => {
+      this.diffBtns = DIFFS.map((d, i) => {
+        const x = xAt(i);
+        const b = makeButton(this, x, cy, cw, 62, d, () => this.selectDiff(i), { selected: i === this.difficulty, fontSize: 21 });
+        const lock = this.add.text(x + cw / 2 - 20, cy, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
+        lock.setDepth(b.root.depth + 1);
+        this.diffLockMarks.push(lock);
+        return b;
+      });
+    });
 
     if (this.scene.isPaused('game')) {
-      makeButton(this, cx, y, bw, 72, '▶  CONTINUE', () => this.continueGame(), { fontSize: 28, fill: COLORS.rows['4'], textColor: '#ffffff' });
-      y += 82;
-      makeButton(this, cx, y, bw, 54, 'New game', () => this.play(), { fontSize: 20 });
-      y += 78;
+      push(66, 24, (cy) => makeButton(this, cx, cy, bw, 66, '▶  CONTINUE', () => this.continueGame(), { fontSize: 27, fill: COLORS.rows['4'], textColor: '#ffffff' }));
+      push(50, 18, (cy) => makeButton(this, cx, cy, bw, 50, 'New game', () => this.play(), { fontSize: 20 }));
     } else {
-      makeButton(this, cx, y, bw, 80, 'PLAY', () => this.play(), { fontSize: 34, fill: COLORS.rows['4'], textColor: '#ffffff' });
-      y += 100;
+      push(80, 24, (cy) => makeButton(this, cx, cy, bw, 80, 'PLAY', () => this.play(), { fontSize: 34, fill: COLORS.rows['4'], textColor: '#ffffff' }));
     }
 
-    lbl('SEEDED CHALLENGES', y);
-    y += 32;
-    const kinds: SeededKind[] = ['daily', 'weekly', 'monthly'];
-    kinds.forEach((kind, i) => {
-      const x = cx - bw / 2 + cw / 2 + i * (cw + 14);
-      makeButton(this, x, y, cw, 56, this.seededLabel(kind), () => this.playSeeded(kind), { fontSize: 15, fill: brighten(COLORS.panel, 30) });
+    push(22, 22, (cy) => lbl('SEEDED CHALLENGES', cy));
+    push(56, 12, (cy) => {
+      const kinds: SeededKind[] = ['daily', 'weekly', 'monthly'];
+      kinds.forEach((kind, i) => makeButton(this, xAt(i), cy, cw, 56, this.seededLabel(kind), () => this.playSeeded(kind), { fontSize: 15, fill: brighten(COLORS.panel, 30) }));
     });
-    y += 80;
 
-    // options: sliders + toggles
-    makeSlider(this, cx - bw / 2, y, bw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v), S);
-    y += 66;
-    makeSlider(this, cx - bw / 2, y, bw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v), S);
-    y += 70;
-    makeToggle(this, cx - bw / 2, y, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; }, S);
-    y += 50;
-    makeToggle(this, cx - bw / 2, y, bw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; }, S);
-    y += 50;
-    makeToggle(this, cx - bw / 2, y, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); }, S);
-    y += 50;
-    makeToggle(this, cx - bw / 2, y, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; }, S);
-    y += 70;
+    push(42, 22, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v), S));
+    push(42, 14, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v), S));
+    push(40, 16, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; }, S));
+    push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; }, S));
+    push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); }, S));
+    push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; }, S));
 
-    const half = (bw - 14) / 2;
-    makeButton(this, cx - half / 2 - 7, y, half, 58, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 18, fill: brighten(COLORS.panel, 40) });
-    makeButton(this, cx + half / 2 + 7, y, half, 58, '☆  Progress', () => openStatsOverlay(this), { fontSize: 18, fill: brighten(COLORS.panel, 40) });
+    push(58, 20, (cy) => {
+      const half = (bw - 14) / 2;
+      makeButton(this, cx - half / 2 - 7, cy, half, 58, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 18, fill: brighten(COLORS.panel, 40) });
+      makeButton(this, cx + half / 2 + 7, cy, half, 58, '☆  Progress', () => openStatsOverlay(this), { fontSize: 18, fill: brighten(COLORS.panel, 40) });
+    });
+
+    const startY = 162;
+    const natural = blocks.reduce((s, b) => s + b.h + b.gap, startY) + 18; // + bottom margin
+    const per = (GAME.height - natural) / blocks.length; // <0 compress, >0 breathe
+    let cursor = startY;
+    for (const b of blocks) {
+      cursor += Math.max(5, b.gap + per) + b.h / 2;
+      b.render(cursor);
+      cursor += b.h / 2;
+    }
   }
 
   private buildTitle(): void {

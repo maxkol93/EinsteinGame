@@ -6,6 +6,9 @@ interface BurstOpts {
   count?: number;
   speed?: number;
   size?: number;
+  diameter?: number; // explicit dot diameter in px (overrides `size`)
+  white?: boolean; // pure-white filled dots (vs row-colour brightened)
+  pulse?: boolean; // scale oscillates (a visible "throb") while in flight
   life?: [number, number];
   gravity?: number;
   angleMin?: number;
@@ -70,20 +73,26 @@ export class Fx {
     this.reduced = on;
   }
 
-  /** Outward spray — SOLID round MONOCHROME dots, brightened so they read
-   *  clearly on the dark board (the popping particles are the core juice). They
-   *  scatter, briefly grow (a little "pop"/pulse via Back.easeOut on scale),
-   *  then shrink + fade. One tint, no rotation/colour noise. */
+  /** Outward spray — SOLID round dots, big and bright so they're unmistakable on
+   *  the dark board (the popping particles are the core juice). They scatter in
+   *  every direction, THROB (scale oscillates) while flying, then shrink + fade.
+   *  `white` makes them filled-white bubbles; `pulse` enables the throb. */
   burst(x: number, y: number, color: number, opts: BurstOpts = {}): void {
     if (this.reduced) return;
     const count = opts.count ?? 14;
     const speed = opts.speed ?? 300;
-    const size = opts.size ?? 5;
+    const diameter = opts.diameter ?? (opts.size ?? 5) * 2.2; // px
     const life = opts.life ?? [600, 1100];
     const grav = opts.gravity ?? 240; // softer than before so they float & settle
     const aMin = opts.angleMin ?? 0;
     const aMax = opts.angleMax ?? 360;
-    const tint = brighten(color, 48); // pop off the dark background
+    const tint = opts.white ? 0xffffff : brighten(color, 48); // pop off the dark bg
+    const s = diameter / 32; // dot tex is 32px
+    // a keyframed scale interpolated across each particle's life → a visible
+    // throb (grow / settle / grow / vanish) instead of a single fade-out.
+    const scale = opts.pulse
+      ? { values: [s * 0.5, s * 1.2, s * 0.82, s * 1.06, 0], interpolation: 'linear' }
+      : { start: s, end: 0, ease: 'Back.easeOut' };
 
     const e = this.scene.add
       .particles(x, y, this.dot, {
@@ -91,9 +100,8 @@ export class Fx {
         speed: { min: speed * 0.25, max: speed },
         angle: { min: aMin, max: aMax },
         gravityY: grav,
-        // grow with a slight overshoot (the "pulse"), then shrink to nothing
-        scale: { start: (size * 2.2) / 32, end: 0, ease: 'Back.easeOut' }, // dot tex is 32px
-        alpha: { start: 1, end: 0, ease: 'Quad.easeIn' },
+        scale: scale as Phaser.Types.GameObjects.Particles.EmitterOpOnUpdateType,
+        alpha: { start: 1, end: 0, ease: 'Cubic.easeIn' },
         tint,
         emitting: false,
       })
@@ -144,15 +152,17 @@ export class Fx {
    *  a single ring, not a stack of concentric circles). `cellPx` is the
    *  candidate-tile size, so the dots scale to ~1/3 of the glyph on any board. */
   smallBurst(x: number, y: number, color: number, cellPx = 44): void {
-    const size = Math.max(6, cellPx * 0.24); // fat, clearly visible dots
-    this.burst(x, y, color, { count: 13, speed: cellPx * 5, size, life: [380, 720], gravity: cellPx * 6 });
+    // fat WHITE bubbles ~a third of the candidate glyph, throbbing as they fly
+    const diameter = Math.max(11, cellPx * 0.36);
+    this.burst(x, y, color, { count: 13, speed: cellPx * 4.4, diameter, life: [460, 820], gravity: cellPx * 4.6, white: true, pulse: true });
     this.ring(x, y, color, cellPx * 0.7, 360, 3);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
    *  shake. Rings/flash linger longer (so the "solve" reads), shake softened. */
   bigBurst(x: number, y: number, w: number, h: number, color: number): void {
-    this.burst(x, y, color, { count: 26, speed: 430, size: 9, life: [820, 1500] });
+    // white throbbing spray ~a fifth of the big glyph + the ring/wave/bloom stack
+    this.burst(x, y, color, { count: 26, speed: 470, diameter: Math.max(16, h * 0.2), life: [820, 1500], white: true, pulse: true, gravity: 300 });
     this.ring(x, y, color, 112, 760, 8);
     this.ring(x, y, 0xffffff, 74, 540, 5);
     this.ring(x, y, color, 184, 980, 4, 26); // wide slow cascade "wave"
