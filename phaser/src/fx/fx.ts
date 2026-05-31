@@ -9,6 +9,7 @@ interface BurstOpts {
   diameter?: number; // explicit dot diameter in px (overrides `size`)
   white?: boolean; // pure-white filled dots (vs row-colour brightened)
   pulse?: boolean; // scale oscillates (a visible "throb") while in flight
+  opaque?: boolean; // no alpha fade — fully solid, vanishing only by shrinking
   life?: [number, number];
   gravity?: number;
   angleMin?: number;
@@ -89,9 +90,10 @@ export class Fx {
     const tint = opts.white ? 0xffffff : brighten(color, 48); // pop off the dark bg
     const s = diameter / 32; // dot tex is 32px
     // a keyframed scale interpolated across each particle's life → a visible
-    // throb (grow / settle / grow / vanish) instead of a single fade-out.
+    // throb (grow / settle / grow / shrink-away) carried entirely by SIZE, so
+    // the dots stay fully solid (no see-through fade) and vanish by shrinking.
     const scale = opts.pulse
-      ? { values: [s * 0.5, s * 1.2, s * 0.82, s * 1.06, 0], interpolation: 'linear' }
+      ? { values: [s * 0.62, s * 1.18, s * 0.86, s * 1.08, 0], interpolation: 'linear' }
       : { start: s, end: 0, ease: 'Back.easeOut' };
 
     const e = this.scene.add
@@ -101,7 +103,7 @@ export class Fx {
         angle: { min: aMin, max: aMax },
         gravityY: grav,
         scale: scale as Phaser.Types.GameObjects.Particles.EmitterOpOnUpdateType,
-        alpha: { start: 1, end: 0, ease: 'Cubic.easeIn' },
+        alpha: opts.opaque ? 1 : { start: 1, end: 0, ease: 'Cubic.easeIn' },
         tint,
         emitting: false,
       })
@@ -152,17 +154,18 @@ export class Fx {
    *  a single ring, not a stack of concentric circles). `cellPx` is the
    *  candidate-tile size, so the dots scale to ~1/3 of the glyph on any board. */
   smallBurst(x: number, y: number, color: number, cellPx = 44): void {
-    // fat WHITE bubbles ~a third of the candidate glyph, throbbing as they fly
-    const diameter = Math.max(11, cellPx * 0.36);
-    this.burst(x, y, color, { count: 13, speed: cellPx * 4.4, diameter, life: [460, 820], gravity: cellPx * 4.6, white: true, pulse: true });
+    // a few solid WHITE bubbles ~a quarter of the candidate glyph, throbbing
+    // (by size only) as they fly out
+    const diameter = Math.max(9, cellPx * 0.3);
+    this.burst(x, y, color, { count: 8, speed: cellPx * 4.4, diameter, life: [440, 780], gravity: cellPx * 4.6, white: true, pulse: true, opaque: true });
     this.ring(x, y, color, cellPx * 0.7, 360, 3);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
    *  shake. Rings/flash linger longer (so the "solve" reads), shake softened. */
   bigBurst(x: number, y: number, w: number, h: number, color: number): void {
-    // white throbbing spray ~a fifth of the big glyph + the ring/wave/bloom stack
-    this.burst(x, y, color, { count: 26, speed: 470, diameter: Math.max(16, h * 0.2), life: [820, 1500], white: true, pulse: true, gravity: 300 });
+    // white throbbing spray ~a sixth of the big glyph + the ring/wave/bloom stack
+    this.burst(x, y, color, { count: 16, speed: 470, diameter: Math.max(13, h * 0.17), life: [820, 1500], white: true, pulse: true, opaque: true, gravity: 300 });
     this.ring(x, y, color, 112, 760, 8);
     this.ring(x, y, 0xffffff, 74, 540, 5);
     this.ring(x, y, color, 184, 980, 4, 26); // wide slow cascade "wave"
