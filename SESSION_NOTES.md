@@ -28,8 +28,31 @@ Quick context for resuming work. Latest session: **2026-05-31**.
   confirm the new menu (sliders/toggles/seeded/progress) and the progress
   overlay (milestone stars + badges).
 
-**STILL TODO (next):** portrait/mobile layout (the board/panel reflow), and
-wiring the `touch` tap-to-select gesture into the board input.
+**STILL TODO (next):** wiring the `touch` tap-to-select gesture into the board
+input (the setting is stored + shown, but the gesture itself isn't changed yet).
+
+## 2026-05-31 — Phaser: portrait / mobile layout
+
+A taller-than-wide viewport (a phone held upright) now gets a vertical layout,
+like the pygame mobile build. `config.ts` detects orientation at boot
+(`PORTRAIT`, `window.innerHeight > innerWidth*1.05`) and picks the canvas size
+(760×1256 portrait vs 1295×735 landscape); `main.ts` + the supersample camera
+adapt automatically. All three scenes branch on `PORTRAIT`:
+
+- **GameScene** — layout constants (`SPAN/BX/BY/PANEL/CLUE_X`) are
+  orientation-aware. Portrait draws a **top info strip** (MENU · TIME · HINT,
+  then lives/zen + mode), a **width-maximised board**, and the **clues below**
+  it spread across as many columns as fit. Landscape unchanged.
+- **MenuScene** — a single-column `buildPortrait()` stacks size/diff, Play/
+  Continue, the seeded challenges, the SOUND/MUSIC sliders, the toggles and
+  Tutorial/Progress down the middle. Landscape keeps the two-column layout.
+- **TutorialScene** — portrait header (MENU · TUTORIAL·block · SKIP + a 6-dot
+  progress row), centred 3×3 board, clues below. (A new player auto-enters the
+  tutorial, so this had to work on a phone.)
+
+Verified: typecheck/build clean; landscape `verify` still green (no regression —
+the 1295×735 test viewport stays landscape); phone-viewport (430×920)
+screenshots confirm the portrait menu, game and tutorial all lay out cleanly.
 
 ## 2026-05-31 — Phaser: new music/SFX (menu loop + random game loop)
 

@@ -32,12 +32,22 @@ export function brighten(color: number, amt: number): number {
 
 export const FONT = '"DejaVu Sans", Arial, sans-serif';
 
-// Canvas matches the pygame landscape build (view/window.py): a left panel, the
-// 615px board, and a right clue panel.
-export const GAME = {
-  width: 1295,
-  height: 735,
-};
+// Orientation: a taller-than-wide viewport (a phone held upright) gets the
+// portrait layout — a top info strip, a width-maximised board, and the clues
+// below it. Desktop / landscape keeps the side-panel layout. Mirrors the pygame
+// _detect_portrait() decision.
+function detectPortrait(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.innerHeight > window.innerWidth * 1.05;
+  } catch {
+    return false;
+  }
+}
+export const PORTRAIT = detectPortrait();
+
+// Canvas: landscape mirrors the pygame side-panel build (left panel, 615px
+// board, right clue panel); portrait mirrors the 760×1256 mobile build.
+export const GAME = PORTRAIT ? { width: 760, height: 1256 } : { width: 1295, height: 735 };
 
 // Supersample factor: the game logic/layout stays in GAME.width×GAME.height
 // coords, but the actual render buffer is RENDER_SCALE× bigger and each scene's

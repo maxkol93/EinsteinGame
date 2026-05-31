@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, FONT, palette, rowColor, brighten, applyRenderScale } from '../config';
+import { COLORS, GAME, FONT, palette, rowColor, brighten, applyRenderScale, PORTRAIT } from '../config';
 import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
@@ -17,13 +17,14 @@ import { TutorialPopup, TutorialAnim } from '../ui/tutorialPopup';
 
 // Layout mirrors the landscape game (a left panel, the board, a right clue
 // panel) but the board is a big 3x3 and the left panel is the block tracker.
-const SPAN = 540;
 const GAP = 4;
-const MARGIN = 60;
-const PANEL = 300;
-const BX = PANEL + MARGIN;
-const BY = 110;
-const CLUE_X = BX + SPAN + MARGIN;
+const SPAN = PORTRAIT ? 600 : 540;
+const MARGIN = PORTRAIT ? 14 : 60;
+const PANEL = PORTRAIT ? GAME.width : 300;
+const BX = PORTRAIT ? Math.floor((GAME.width - SPAN) / 2) : PANEL + MARGIN;
+const BY = PORTRAIT ? 250 : 110;
+const CLUE_X = PORTRAIT ? 0 : BX + SPAN + MARGIN;
+const TUT_CLUES_TOP = BY + SPAN + 18; // portrait: clues below the board
 const RULE_CELL = 44;
 const STEP_MS = 140;
 const HOLD_MS = 350;
@@ -145,6 +146,24 @@ export class TutorialScene extends Phaser.Scene {
   }
 
   private buildPanel(): void {
+    if (PORTRAIT) {
+      // compact top header: MENU | TUTORIAL · block | SKIP, then a 6-dot row
+      makeButton(this, 90, 36, 150, 44, '☰  MENU', () => this.toMenu(), { fontSize: 16 });
+      makeButton(this, GAME.width - 90, 36, 150, 44, 'SKIP', () => this.skip(), { fontSize: 16 });
+      this.add.text(GAME.width / 2, 92, `TUTORIAL  ·  ${this.level.ruleName}`, { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text }).setOrigin(0.5);
+      const tracker = this.dir.tracker();
+      const gap = 70;
+      const startX = GAME.width / 2 - ((tracker.length - 1) * gap) / 2;
+      tracker.forEach((row, i) => {
+        const dx = startX + i * gap;
+        const g = this.add.graphics();
+        const col = row.done ? COLORS.accent : row.current ? COLORS.accent : brighten(COLORS.panel, 70);
+        if (row.done) { g.fillStyle(col, 1); g.fillCircle(dx, 138, 9); }
+        else { g.lineStyle(row.current ? 3 : 2, col, 1); g.strokeCircle(dx, 138, 9); }
+        this.add.text(dx, 162, `${i + 1}`, { fontFamily: FONT, fontSize: '12px', color: row.current || row.done ? palette.text : '#7a737a' }).setOrigin(0.5);
+      });
+      return;
+    }
     makeButton(this, PANEL / 2, 42, PANEL - 60, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
     this.add.text(PANEL / 2, 96, 'T U T O R I A L', { fontFamily: FONT, fontStyle: 'bold', fontSize: '16px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(2);
     this.add.text(PANEL / 2, 124, this.level.ruleName, { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text }).setOrigin(0.5);
@@ -604,8 +623,28 @@ export class TutorialScene extends Phaser.Scene {
 
   private buildClues(): void {
     if (!this.level.clues.length) return;
-    this.add.text(CLUE_X + PANEL / 2, 60, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text }).setOrigin(0.5).setLetterSpacing(2);
     const ruleW = RULE_CELL * 3;
+
+    if (PORTRAIT) {
+      // clues centred below the board (the tutorial has at most 3)
+      this.add.text(GAME.width / 2, TUT_CLUES_TOP, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5).setLetterSpacing(2);
+      const colGap = 24;
+      const cols = Math.min(this.level.clues.length, Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (ruleW + colGap))));
+      const rows = Math.ceil(this.level.clues.length / cols);
+      const totalW = cols * ruleW + (cols - 1) * colGap;
+      const startX = (GAME.width - totalW) / 2;
+      const top = TUT_CLUES_TOP + 30;
+      const rowH = RULE_CELL + 16;
+      this.level.clues.forEach((rule, i) => {
+        const gx = startX + (i % cols) * (ruleW + colGap);
+        const gy = top + Math.floor(i / cols) * rowH;
+        void rows;
+        this.makeClueGroup(rule, gx, gy);
+      });
+      return;
+    }
+
+    this.add.text(CLUE_X + PANEL / 2, 60, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text }).setOrigin(0.5).setLetterSpacing(2);
     const startY = 120;
     const rowH = RULE_CELL + 22;
     this.level.clues.forEach((rule, i) => {

@@ -12,15 +12,19 @@ import { stats, parTime } from '../model/stats';
 import { evaluate, achievementInfo } from '../model/achievements';
 import { SeededKind } from '../model/daily';
 import { settings } from '../model/settings';
+import { PORTRAIT } from '../config';
 
-// Layout mirrors the pygame landscape build (view/window.py).
-const SPAN = 615;
+// Layout: landscape mirrors the pygame side-panel build; portrait mirrors the
+// mobile build (a top info strip, a width-maximised board, clues below it).
 const GAP = 3;
-const MARGIN = 60;
-const PANEL = 280;
-const BX = PANEL + MARGIN; // board origin x = 340
-const BY = MARGIN; // board origin y = 60
-const CLUE_X = BX + SPAN + MARGIN; // right panel x = 1015
+const TOP_H = 176; // portrait top-strip height
+const SPAN = PORTRAIT ? GAME.width - 28 : 615;
+const MARGIN = PORTRAIT ? 14 : 60;
+const PANEL = PORTRAIT ? GAME.width : 280; // landscape side-panel width
+const BX = PORTRAIT ? 14 : PANEL + MARGIN; // board origin x
+const BY = PORTRAIT ? TOP_H : MARGIN; // board origin y
+const CLUE_X = PORTRAIT ? 0 : BX + SPAN + MARGIN; // clues area x (full width in portrait)
+const CLUES_TOP_Y = BY + SPAN + 16; // portrait: clues start below the board
 const RULE_CELL = 38;
 const RULES_TOP = 54;
 const STEP_MS = 130;
@@ -206,17 +210,27 @@ export class GameScene extends Phaser.Scene {
   private buildBackground(): void {
     const panelColor = brighten(COLORS.bg, 13);
     const divider = brighten(panelColor, 30);
-    const leftEdge = BX - 22; // left panel's right edge
-    const rightEdge = BX + SPAN + 22; // right panel's left edge
-
     const g = this.add.graphics().setDepth(-10);
     g.fillStyle(panelColor, 1);
+
+    if (PORTRAIT) {
+      // top info strip + the clues area below the board
+      const stripH = BY - 12;
+      g.fillRect(0, 0, GAME.width, stripH);
+      g.fillRect(0, CLUES_TOP_Y - 14, GAME.width, GAME.height - (CLUES_TOP_Y - 14));
+      g.lineStyle(1, divider, 1);
+      g.lineBetween(0, stripH, GAME.width, stripH);
+      g.lineBetween(0, CLUES_TOP_Y - 14, GAME.width, CLUES_TOP_Y - 14);
+      return;
+    }
+
+    const leftEdge = BX - 22; // left panel's right edge
+    const rightEdge = BX + SPAN + 22; // right panel's left edge
     g.fillRect(0, 0, leftEdge, GAME.height);
     g.fillRect(rightEdge, 0, GAME.width - rightEdge, GAME.height);
     g.lineStyle(1, divider, 1);
     g.lineBetween(leftEdge, 0, leftEdge, GAME.height);
     g.lineBetween(rightEdge, 0, rightEdge, GAME.height);
-
     this.add.image(leftEdge, 0, shadowStripTex(this, false, GAME.height)).setOrigin(0, 0).setDepth(-9);
     this.add.image(rightEdge - 16, 0, shadowStripTex(this, true, GAME.height)).setOrigin(0, 0).setDepth(-9);
   }
@@ -224,6 +238,32 @@ export class GameScene extends Phaser.Scene {
   // --------------------------- left panel ---------------------------
 
   private buildPanel(): void {
+    const cplx = COMPLEXITY[this.size][this.difficulty];
+    const modeLabel = this.seededKind
+      ? `${this.seededKind.toUpperCase()}  ·  ${this.size}×${this.size}`
+      : this.zen
+        ? `ZEN  ·  ${this.size}×${this.size}`
+        : `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`;
+
+    if (PORTRAIT) {
+      // a horizontal top strip: MENU | TIME | HINT, then lives/zen + mode below
+      makeButton(this, 96, 36, 156, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
+      makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+      this.timerText = this.add.text(GAME.width / 2, 36, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text }).setOrigin(0.5);
+      if (this.zen) {
+        this.add.text(GAME.width / 2 - 150, 118, '∞', { fontFamily: FONT, fontStyle: 'bold', fontSize: '34px', color: '#86b89a' }).setOrigin(0.5);
+      } else {
+        for (let i = 0; i < MAX_LIVES; i++) {
+          const { cx, cy } = this.heartPos(i);
+          this.hearts.push(this.add.text(cx, cy, '♥', { fontFamily: FONT, fontSize: '30px', color: '#e05a68' }).setOrigin(0.5));
+        }
+        this.updateLives();
+      }
+      this.add.text(GAME.width / 2 + 70, 110, modeLabel, { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5);
+      this.add.text(GAME.width / 2 + 70, 132, `${cplx} cells given`, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
+      return;
+    }
+
     makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
 
     this.add.text(PANEL / 2, 120, 'T I M E', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
@@ -244,12 +284,6 @@ export class GameScene extends Phaser.Scene {
       this.updateLives();
     }
 
-    const cplx = COMPLEXITY[this.size][this.difficulty];
-    const modeLabel = this.seededKind
-      ? `${this.seededKind.toUpperCase()}  ·  ${this.size}×${this.size}`
-      : this.zen
-        ? `ZEN  ·  ${this.size}×${this.size}`
-        : `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`;
     this.add
       .text(PANEL / 2, 268, modeLabel, {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text,
@@ -263,6 +297,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private heartPos(i: number): { cx: number; cy: number } {
+    if (PORTRAIT) {
+      const start = GAME.width / 2 - 150 - ((MAX_LIVES - 1) * 36) / 2;
+      return { cx: start + i * 36, cy: 118 };
+    }
     const start = PANEL / 2 - ((MAX_LIVES - 1) * 38) / 2;
     return { cx: start + i * 38, cy: 224 };
   }
@@ -912,10 +950,6 @@ export class GameScene extends Phaser.Scene {
   // --------------------------- clues ---------------------------
 
   private buildClues(): void {
-    this.add
-      .text(CLUE_X + PANEL / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
-      .setOrigin(0.5);
-
     // Group clues by type so the panel reads in a consistent order:
     // same-column (^), neighbours (<->), left-of (...), then three-in-a-row.
     const rank = (r: Rule): number => {
@@ -926,12 +960,34 @@ export class GameScene extends Phaser.Scene {
       return 3; // triple (all-number)
     };
     const rules = [...this.model.displayableRules].sort((a, b) => rank(a) - rank(b));
-
     const ruleW = RULE_CELL * 3;
+
+    if (PORTRAIT) {
+      // clues spread below the board in as many columns as fit the full width
+      this.add.text(GAME.width / 2, CLUES_TOP_Y - 2, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5);
+      const colGap = 18;
+      const cols = Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (ruleW + colGap)));
+      const rowH = RULE_CELL + 10;
+      const totalW = cols * ruleW + (cols - 1) * colGap;
+      const startX = (GAME.width - totalW) / 2;
+      const top = CLUES_TOP_Y + 24;
+      const perCol = Math.ceil(rules.length / cols);
+      rules.forEach((rule, i) => {
+        const tx = Math.floor(i / perCol);
+        const ty = i % perCol;
+        const gx = startX + tx * (ruleW + colGap);
+        const gy = top + ty * rowH;
+        this.makeClueGroup(rule, gx, gy);
+      });
+      return;
+    }
+
+    this.add
+      .text(CLUE_X + PANEL / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
+      .setOrigin(0.5);
     const colGap = 16;
     const padX = Math.floor((PANEL - 2 * ruleW - colGap) / 2);
     const rowH = RULE_CELL + 9;
-
     rules.forEach((rule, i) => {
       const ty = i % 14;
       const tx = Math.floor(i / 14);

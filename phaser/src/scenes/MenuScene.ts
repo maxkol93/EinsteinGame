@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, FONT, palette, brighten, applyRenderScale } from '../config';
+import { COLORS, GAME, FONT, palette, brighten, applyRenderScale, PORTRAIT } from '../config';
 import { makeButton, BtnHandle } from '../ui/button';
 import { makeSlider } from '../ui/slider';
 import { makeToggle } from '../ui/toggle';
@@ -59,18 +59,98 @@ export class MenuScene extends Phaser.Scene {
     });
 
     this.buildTitle();
-    this.buildLeftColumn();
-    this.buildOptionsPanel();
-    this.buildProgress();
+    if (PORTRAIT) {
+      this.buildPortrait();
+    } else {
+      this.buildLeftColumn();
+      this.buildOptionsPanel();
+      this.buildProgress();
+    }
     this.refreshLocks();
+  }
+
+  /** Single-column portrait/mobile menu — everything stacked down the middle. */
+  private buildPortrait(): void {
+    const cx = GAME.width / 2;
+    const bw = GAME.width - 80;
+    let y = 230;
+
+    this.add.text(cx, y, 'BOARD SIZE', { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0.5);
+    y += 34;
+    this.sizeBtns = SIZES.map((s, i) => {
+      const w = 150;
+      const x = cx - (SIZES.length - 1) * (w + 14) * 0.5 + i * (w + 14);
+      const b = makeButton(this, x, y, w, 56, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size, fontSize: 22 });
+      const lock = this.add.text(x + w / 2 - 18, y, '🔒', { fontSize: '18px' }).setOrigin(0.5).setVisible(false);
+      lock.setDepth(b.root.depth + 1);
+      this.sizeLockMarks.push(lock);
+      return b;
+    });
+    y += 84;
+
+    this.add.text(cx, y, 'DIFFICULTY', { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0.5);
+    y += 34;
+    this.diffBtns = DIFFS.map((d, i) => {
+      const w = 150;
+      const x = cx - (DIFFS.length - 1) * (w + 14) * 0.5 + i * (w + 14);
+      const b = makeButton(this, x, y, w, 56, d, () => this.selectDiff(i), { selected: i === this.difficulty, fontSize: 20 });
+      const lock = this.add.text(x + w / 2 - 18, y, '🔒', { fontSize: '18px' }).setOrigin(0.5).setVisible(false);
+      lock.setDepth(b.root.depth + 1);
+      this.diffLockMarks.push(lock);
+      return b;
+    });
+    y += 96;
+
+    if (this.scene.isPaused('game')) {
+      makeButton(this, cx, y, bw, 64, '▶  CONTINUE', () => this.continueGame(), { fontSize: 26, fill: COLORS.rows['4'], textColor: '#ffffff' });
+      y += 70;
+      makeButton(this, cx, y, bw, 48, 'New game', () => this.play(), { fontSize: 18 });
+      y += 64;
+    } else {
+      makeButton(this, cx, y, bw, 72, 'PLAY', () => this.play(), { fontSize: 30, fill: COLORS.rows['4'], textColor: '#ffffff' });
+      y += 92;
+    }
+
+    this.add.text(cx, y, 'SEEDED CHALLENGES', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
+    y += 30;
+    const kinds: SeededKind[] = ['daily', 'weekly', 'monthly'];
+    const sw = (bw - 16) / 3;
+    kinds.forEach((kind, i) => {
+      const x = cx - bw / 2 + sw / 2 + i * (sw + 8);
+      makeButton(this, x, y, sw, 52, this.seededLabel(kind), () => this.playSeeded(kind), { fontSize: 14, fill: brighten(COLORS.panel, 26) });
+    });
+    y += 86;
+
+    // options: sliders + toggles
+    makeSlider(this, cx - bw / 2, y, bw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v));
+    y += 56;
+    makeSlider(this, cx - bw / 2, y, bw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v));
+    y += 62;
+    makeToggle(this, cx - bw / 2, y, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
+    y += 42;
+    makeToggle(this, cx - bw / 2, y, bw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
+    y += 42;
+    makeToggle(this, cx - bw / 2, y, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; });
+    y += 42;
+    makeToggle(this, cx - bw / 2, y, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
+    y += 56;
+
+    const half = (bw - 14) / 2;
+    makeButton(this, cx - half / 2 - 7, y, half, 52, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 17 });
+    makeButton(this, cx + half / 2 + 7, y, half, 52, '☆  Progress', () => openStatsOverlay(this), { fontSize: 17 });
+    y += 74;
+
+    const earned = new Set(stats.achievements);
+    this.add.text(cx, y, `Wins ${stats.totalWins}   ·   Best streak ${stats.bestStreak}   ·   Badges ${earned.size}/${ACHIEVEMENTS.length}`, { fontFamily: FONT, fontStyle: 'bold', fontSize: '16px', color: palette.text }).setOrigin(0.5);
   }
 
   private buildTitle(): void {
     const cx = GAME.width / 2;
-    this.add.text(cx, 54, 'EINSTEIN', { fontFamily: FONT, fontStyle: 'bold', fontSize: '60px', color: palette.text }).setOrigin(0.5).setLetterSpacing(14);
-    this.add.text(cx, 98, 'a logic-grid deduction puzzle', { fontFamily: FONT, fontSize: '18px', color: palette.accent }).setOrigin(0.5);
+    const ty = PORTRAIT ? 80 : 54;
+    this.add.text(cx, ty, 'EINSTEIN', { fontFamily: FONT, fontStyle: 'bold', fontSize: PORTRAIT ? '52px' : '60px', color: palette.text }).setOrigin(0.5).setLetterSpacing(PORTRAIT ? 8 : 14);
+    this.add.text(cx, ty + 44, 'a logic-grid deduction puzzle', { fontFamily: FONT, fontSize: '18px', color: palette.accent }).setOrigin(0.5);
     Object.values(COLORS.rows).forEach((color, i, arr) => {
-      this.add.circle(cx - ((arr.length - 1) * 24) / 2 + i * 24, 126, 6, color);
+      this.add.circle(cx - ((arr.length - 1) * 24) / 2 + i * 24, ty + 72, 6, color);
     });
   }
 
