@@ -70,6 +70,7 @@ export class GameScene extends Phaser.Scene {
   private difficulty = 0;
   private seed = 0;
   private isRetry = false;
+  private zen = false;
 
   // results filled in at finish(), read by showEndPanel()
   private bestText: string | null = null;
@@ -112,11 +113,12 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
-  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean }): void {
+  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean; zen?: boolean }): void {
     this.size = data?.size ?? 4;
     this.difficulty = data?.difficulty ?? 0;
     this.seed = data?.seed ?? 0;
     this.isRetry = !!data?.retry;
+    this.zen = !!data?.zen;
     this.bestText = null;
     this.newRecord = false;
     this.freshBadges = [];
@@ -209,16 +211,22 @@ export class GameScene extends Phaser.Scene {
       .text(PANEL / 2, 152, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text })
       .setOrigin(0.5);
 
-    this.add.text(PANEL / 2, 188, 'L I V E S', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
-    for (let i = 0; i < MAX_LIVES; i++) {
-      const { cx, cy } = this.heartPos(i);
-      this.hearts.push(this.add.text(cx, cy, '♥', { fontFamily: FONT, fontSize: '32px', color: '#e05a68' }).setOrigin(0.5));
+    if (this.zen) {
+      // Zen: no lives to lose — show a calm infinity instead of the hearts.
+      this.add.text(PANEL / 2, 188, 'Z E N', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
+      this.add.text(PANEL / 2, 224, '∞', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: '#86b89a' }).setOrigin(0.5);
+    } else {
+      this.add.text(PANEL / 2, 188, 'L I V E S', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
+      for (let i = 0; i < MAX_LIVES; i++) {
+        const { cx, cy } = this.heartPos(i);
+        this.hearts.push(this.add.text(cx, cy, '♥', { fontFamily: FONT, fontSize: '32px', color: '#e05a68' }).setOrigin(0.5));
+      }
+      this.updateLives();
     }
-    this.updateLives();
 
     const cplx = COMPLEXITY[this.size][this.difficulty];
     this.add
-      .text(PANEL / 2, 268, `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`, {
+      .text(PANEL / 2, 268, this.zen ? `ZEN  ·  ${this.size}×${this.size}` : `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`, {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text,
       })
       .setOrigin(0.5);
@@ -628,6 +636,8 @@ export class GameScene extends Phaser.Scene {
         onComplete: () => { chip.img.x = chip.cx; chip.txt.x = chip.cx; chip.outline.x = chip.cx; },
       });
     }
+    // Zen: the run can never end — give the feedback but keep all lives.
+    if (this.zen) return;
     this.lives -= 1;
     this.updateLives();
     const hp = this.heartPos(Math.max(0, this.lives));
@@ -813,6 +823,15 @@ export class GameScene extends Phaser.Scene {
    *  _finish_round: a Retry never counts (no record, no streak, no badges). */
   private recordResult(won: boolean): void {
     if (this.isRetry) return; // a replay of the same board doesn't count
+    if (this.zen) {
+      // Zen never records a win/loss/streak/progression — only the calm-solve
+      // badge. (Loss can't happen in Zen anyway.)
+      if (won) {
+        const fresh = stats.unlock(evaluate({ won: true, zen: true }));
+        this.freshBadges = fresh.map((id) => achievementInfo(id).name);
+      }
+      return;
+    }
     if (won) {
       const prevBest = stats.recordWin(this.difficulty, this.size, this.seconds, true);
       this.newRecord = prevBest === null || this.seconds < prevBest;
@@ -840,7 +859,13 @@ export class GameScene extends Phaser.Scene {
   private showEndPanel(won: boolean): void {
     const hasBadges = won && this.freshBadges.length > 0;
     const bestLine = won
-      ? this.isRetry ? 'Retry — not recorded' : this.bestText ? `best ${this.bestText}` : ''
+      ? this.zen
+        ? 'Zen — not recorded'
+        : this.isRetry
+          ? 'Retry — not recorded'
+          : this.bestText
+            ? `best ${this.bestText}`
+            : ''
       : '';
 
     // Measure top-down, then centre the panel around the content so nothing
@@ -910,8 +935,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     const btnY = y + 26 + 26;
-    const b1 = makeButton(this, cx - 120, btnY, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
-    const b2 = makeButton(this, cx + 120, btnY, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true }), { fontSize: 20 });
+    const b1 = makeButton(this, cx - 120, btnY, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, zen: this.zen }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
+    const b2 = makeButton(this, cx + 120, btnY, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true, zen: this.zen }), { fontSize: 20 });
     const b3 = makeButton(this, cx, btnY + 52 / 2 + 14 + 48 / 2, 224, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
     [b1, b2, b3].forEach((b) => b.root.setDepth(102));
   }

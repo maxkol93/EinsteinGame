@@ -10,9 +10,12 @@ interface SettingsData {
   // When true the menu opens every size/difficulty regardless of win counts
   // (toggled with the U debug key, mirroring the pygame debug unlock).
   unlock_all: boolean;
+  // Zen mode — mistakes never end the run; the result isn't recorded (no win
+  // stat, no streak, no progression), only the "Inner Peace" badge is earned.
+  zen: boolean;
 }
 
-const DEFAULTS: SettingsData = { unlock_all: false };
+const DEFAULTS: SettingsData = { unlock_all: false, zen: false };
 
 class Settings {
   private data: SettingsData = { ...DEFAULTS };
@@ -23,6 +26,7 @@ class Settings {
       if (raw) {
         const s = JSON.parse(raw) as Partial<SettingsData>;
         if (typeof s.unlock_all === 'boolean') this.data.unlock_all = s.unlock_all;
+        if (typeof s.zen === 'boolean') this.data.zen = s.zen;
       }
     } catch {
       /* keep defaults */
@@ -33,6 +37,13 @@ class Settings {
 
   set unlockAll(v: boolean) {
     this.data.unlock_all = v;
+    this.save();
+  }
+
+  get zen(): boolean { return this.data.zen; }
+
+  set zen(v: boolean) {
+    this.data.zen = v;
     this.save();
   }
 

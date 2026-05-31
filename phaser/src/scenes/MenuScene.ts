@@ -38,6 +38,7 @@ export class MenuScene extends Phaser.Scene {
 
     audio.startMusic();
     this.buildAudioToggles();
+    this.buildZenToggle();
 
     // U toggles the debug unlock-all (mirrors pressing U in the pygame build).
     this.input.keyboard?.on('keydown-U', () => {
@@ -188,7 +189,25 @@ export class MenuScene extends Phaser.Scene {
       this.showNotice(SIZE_LOCK_MSG);
       return;
     }
-    this.scene.start('game', { size: this.size, difficulty: this.difficulty });
+    this.scene.start('game', { size: this.size, difficulty: this.difficulty, zen: settings.zen });
+  }
+
+  /** Zen toggle (top-left, mirroring the audio toggles): a calm, no-lives
+   *  solve. The state persists; PLAY then launches the board in Zen mode. */
+  private buildZenToggle(): void {
+    const w = 156;
+    const x = w / 2 + 24;
+    let zen: BtnHandle;
+    zen = makeButton(this, x, 40, w, 40, this.zenLabel(), () => {
+      settings.zen = !settings.zen;
+      zen.setSelected(settings.zen);
+      zen.setText(this.zenLabel());
+      this.showNotice(settings.zen ? 'Zen on — no lives, just solve' : 'Zen off');
+    }, { fontSize: 15, selected: settings.zen });
+  }
+
+  private zenLabel(): string {
+    return settings.zen ? '☯  ZEN ON' : '☯  ZEN OFF';
   }
 
   private showNotice(msg: string): void {

@@ -2,6 +2,30 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: Zen mode
+
+Ported Zen — a calm, no-lives solve. Faithful to presenter.py's `_zen` flag.
+
+- **Settings:** added the persisted `zen` flag to `model/settings.ts`.
+- **Menu:** a top-left **☯ ZEN ON/OFF** toggle (mirrors the audio toggles);
+  when on, PLAY launches the board in Zen and a note reads "no lives, just
+  solve". The flag persists across sessions.
+- **GameScene:** in Zen a wrong move gives the full feedback (red flash, shake,
+  jitter, `wrong` sfx) but **never costs a life and never ends the run**
+  (`registerWrong` returns early). The left panel shows **ZEN + ∞** instead of
+  hearts, and the mode line reads `ZEN · N×N`. `recordResult` records **no**
+  win/loss/streak/progression in Zen — only the "Inner Peace" badge on a win
+  (via `evaluate({won:true, zen:true})`); the end panel shows "Zen — not
+  recorded". New board / Retry carry the Zen flag through `scene.restart`.
+- **Verified:** `npm run build` green (~355 KB gz). A throwaway Playwright
+  check confirmed: 3 wrong moves in Zen kept all lives + no game-over, a win
+  granted the `zen` badge while leaving `easy_4` wins=0 and streak=0; the
+  standard (non-Zen) `npm run verify` still passes with zero console errors.
+
+**Next (still not ported):** exact Daily/Weekly/Monthly (needs the CPython-MT
+RNG validated against `shared/daily_vectors.json`), the tutorial, and a fuller
+per-mode milestone-star stats screen.
+
 ## 2026-05-31 — Phaser: stats, progression unlocks & achievements
 
 Ported the meta-progression layer (the casual-player hook) — stats, mode
