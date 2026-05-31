@@ -2,6 +2,26 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: new music/SFX (menu loop + random game loop)
+
+The user replaced the audio (commit "sound v3" in `view/sounds/`): added
+`game_loop_1/2/3` (game_loop_3 = the old ambient_loop renamed), a `menu_loop`,
+and new `lose/pick/pick_2/win/wrong` SFX. Wired the Phaser build to it:
+
+- Copied the new/replaced oggs into `phaser/public/sounds/` (removed
+  `ambient_loop.ogg`). The replaced SFX keep their keys → no code change.
+- `audio/sound.ts`: split music into a per-context bed. `playMusic('menu')`
+  loops `menu_loop`; `playMusic('game')` picks a **random** game loop per game
+  session (user's choice). Switching context stops the previous bed; only one
+  loop plays at a time. `startMusic()` kept as a menu shim; `setMusicEnabled`
+  replays the current context.
+- Scenes: MenuScene → `playMusic('menu')` (but NOT when it's the pause overlay
+  over a still-paused game — keeps that game's loop so Continue is seamless);
+  GameScene + TutorialScene → `playMusic('game')`.
+- `verify.mjs` audio assertion updated to the new loop keys.
+- **Verified:** typecheck/build clean, `verify` green; a music probe confirmed
+  the menu plays `menu_loop` and the game a single random `game_loop_*`.
+
 ## 2026-05-31 — Phaser: tutorial polish + menu continue/restart + block select
 
 Seven player-reported items:

@@ -23,7 +23,11 @@ export const SOUND_KEYS = [
 ] as const;
 export type SoundKey = (typeof SOUND_KEYS)[number];
 
-const MUSIC_KEY = 'ambient_loop';
+// Music: a dedicated looping bed for the menu, and one of several looping beds
+// for the playing field — a random game loop is chosen per game session.
+const MENU_LOOP = 'menu_loop';
+const GAME_LOOPS = ['game_loop_1', 'game_loop_2', 'game_loop_3'];
+type MusicContext = 'menu' | 'game';
 
 // Per-sound trim so one master volume stays musically balanced (mirrors
 // _SOUND_GAIN): subtle UI ticks, prominent game events.
@@ -55,6 +59,8 @@ interface Persisted {
 class AudioManager {
   private sound?: Phaser.Sound.BaseSoundManager;
   private music?: Phaser.Sound.BaseSound;
+  private currentKey?: string; // the loop key currently loaded into `music`
+  private musicContext?: MusicContext; // which bed is (or should be) playing
   private last: Record<string, number> = {};
   private clock = 0;
 
@@ -74,7 +80,7 @@ class AudioManager {
   /** Queue the whole bank on a scene's loader. Call from a scene `preload()`. */
   preload(scene: Phaser.Scene): void {
     for (const k of SOUND_KEYS) scene.load.audio(k, `sounds/${k}.ogg`);
-    scene.load.audio(MUSIC_KEY, `sounds/${MUSIC_KEY}.ogg`);
+    for (const k of [MENU_LOOP, ...GAME_LOOPS]) scene.load.audio(k, `sounds/${k}.ogg`);
   }
 
   // ---- persistence ----
@@ -132,21 +138,35 @@ class AudioManager {
   }
 
   // ---- music ----
-  /** Begin (or resume) the ambient loop. Idempotent — never restarts a loop
-   *  that's already playing. WebAudio auto-unlocks on the first user gesture,
-   *  so an early call simply becomes audible once the context resumes. */
-  startMusic(): void {
+  /** Start the looping bed for a context: `menu_loop` in the menu, or a RANDOM
+   *  game loop on the playing field (re-rolled each time the game context is
+   *  (re)entered). Switching context stops the previous bed. Idempotent within
+   *  a context — it won't restart a menu bed that's already playing, but each
+   *  fresh entry into 'game' picks a new loop. WebAudio auto-unlocks on the
+   *  first user gesture, so an early call becomes audible once it resumes. */
+  playMusic(context: MusicContext): void {
+    this.musicContext = context;
     if (!this.sound || !this.musicOn) return;
-    if (!this.music) {
-      if (!this.cacheHas(MUSIC_KEY)) return;
-      this.music = this.sound.add(MUSIC_KEY, { loop: true, volume: this.musicVolume });
-    }
-    if (!this.music.isPlaying) this.music.play();
-    (this.music as Phaser.Sound.WebAudioSound).setVolume?.(this.musicVolume);
+    // already in the menu bed and it's running → leave it
+    if (context === 'menu' && this.music && this.currentKey === MENU_LOOP && this.music.isPlaying) return;
+    this.stopMusic();
+    const key = context === 'menu' ? MENU_LOOP : GAME_LOOPS[Math.floor(Math.random() * GAME_LOOPS.length)];
+    if (!this.cacheHas(key)) return;
+    this.currentKey = key;
+    this.music = this.sound.add(key, { loop: true, volume: this.musicVolume });
+    this.music.play();
+  }
+
+  /** Back-compat shim — older call sites used startMusic() for the menu bed. */
+  startMusic(): void {
+    this.playMusic('menu');
   }
 
   stopMusic(): void {
     this.music?.stop();
+    this.music?.destroy();
+    this.music = undefined;
+    this.currentKey = undefined;
   }
 
   // ---- settings getters/setters (for the menu toggles) ----
@@ -162,7 +182,7 @@ class AudioManager {
   setMusicEnabled(on: boolean): void {
     this.musicOn = on;
     this.persist();
-    if (on) this.startMusic();
+    if (on) this.playMusic(this.musicContext ?? 'menu');
     else this.stopMusic();
   }
 }

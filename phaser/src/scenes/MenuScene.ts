@@ -39,7 +39,10 @@ export class MenuScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor(COLORS.bg);
     const cx = GAME.width / 2;
 
-    audio.startMusic();
+    // Standalone menu plays the menu bed; but when this menu is the pause
+    // overlay over a still-paused game, keep that game's loop playing so
+    // Continue resumes seamlessly (resume doesn't re-run the game's create).
+    if (!this.scene.isPaused('game')) audio.playMusic('menu');
     this.buildAudioToggles();
     this.buildZenToggle();
     this.buildTutorialButton();

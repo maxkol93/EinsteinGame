@@ -121,7 +121,7 @@ export class TutorialScene extends Phaser.Scene {
     this.bindInput();
     this.playEntrance();
 
-    audio.startMusic();
+    audio.playMusic('game');
     audio.play('start');
 
     this.showIntro();

@@ -183,7 +183,7 @@ export class GameScene extends Phaser.Scene {
     this.bindInput();
     this.startTimer();
 
-    audio.startMusic();
+    audio.playMusic('game');
     audio.play('start');
 
     this.playEntrance();
