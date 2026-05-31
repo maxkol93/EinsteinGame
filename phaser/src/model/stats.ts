@@ -163,6 +163,28 @@ export class Stats {
     this.save();
   }
 
+  /** Mark a seeded puzzle (daily/weekly/monthly) cleared for `period`. Advances
+   *  the streak (an adjacent period extends it, a gap restarts it). Returns the
+   *  previous best time (or null). Mirrors stats.py record_seeded. */
+  recordSeeded(kind: 'daily' | 'weekly' | 'monthly', period: number, seconds: number): number | null {
+    const block = this.data[kind];
+    const prevBest = block.best_time;
+    if (block.last === period) return prevBest; // already logged
+    block.streak = block.last === period - 1 ? block.streak + 1 : 1;
+    block.best = Math.max(block.best, block.streak);
+    block.last = period;
+    block.count += 1;
+    seconds = Math.max(0, Math.floor(seconds));
+    if (seconds > 0 && (prevBest === null || seconds < prevBest)) block.best_time = seconds;
+    this.save();
+    return prevBest;
+  }
+
+  /** Read-only copy of a seeded block (for the menu labels + progress screen). */
+  seeded(kind: 'daily' | 'weekly' | 'monthly'): SeededEntry {
+    return { ...this.data[kind] };
+  }
+
   /** Add achievement ids; return the subset that were genuinely new. */
   unlock(ids: Iterable<string>): string[] {
     const have = new Set(this.data.achievements);

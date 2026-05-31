@@ -28,7 +28,7 @@ await page.waitForTimeout(600);
 await page.screenshot({ path: shot('shot-menu.png') });
 console.log('menu rendered');
 
-await page.mouse.click(1295 / 2, 480); // PLAY
+await page.mouse.click(360, 392); // PLAY (left column)
 await page.waitForFunction(() => window.game?.scene?.isActive('game'), { timeout: 10000 });
 await page.waitForTimeout(700);
 

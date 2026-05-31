@@ -2,6 +2,35 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: full menu options + daily/weekly/monthly + progress + lose fix
+
+- **Lose sound** — `play('lose')` fired but landed on the same frame as the
+  fatal `wrong` (whose new file is long/loud), masking it. Now delayed 320ms so
+  the lose sting is clearly audible after the wrong feedback.
+- **Daily/Weekly/Monthly** (`model/daily.ts`) — deterministic per-period
+  size/difficulty/seed (NOT bit-identical to pygame — only Phaser ships, so no
+  cross-version sync needed). Menu buttons show `Daily #N ✓`; a win records into
+  the seeded block (`stats.recordSeeded`) AND the normal mode stats; the
+  left-panel mode label reads e.g. `DAILY · 5×5`; disabled in Zen.
+- **Menu redesigned** to two columns + a right OPTIONS panel: SOUND/MUSIC
+  **sliders** (`ui/slider.ts` → `audio.setVolume/setMusicVolume`), **toggles**
+  (`ui/toggle.ts`) for Show tooltips / Tap to select (touch) / Reduce motion /
+  Zen, and Tutorial + Progress buttons. Left column keeps size/diff + Play/
+  Continue + the three seeded challenges. (Old top-corner toggles removed.)
+- **Progress screen** (`ui/statsOverlay.ts`, port of AchievementsOverlay): 3
+  seeded rows + 9 difficulty×size rows (best time, wins, 5 milestone stars at
+  5/10/20/50/100) + the badge list.
+- **Settings** gained `tooltips`/`touch`/`reduce_motion`; `tooltips` gates the
+  board tooltips, `reduce_motion` calls `fx.setReduced` (suppresses shake /
+  bursts / confetti / vignette pulse; rings + flashes stay). `touch` is stored
+  but the tap-to-select behaviour itself isn't wired into input yet.
+- **Verified:** typecheck/build clean, smoke 270 + verify green; screenshots
+  confirm the new menu (sliders/toggles/seeded/progress) and the progress
+  overlay (milestone stars + badges).
+
+**STILL TODO (next):** portrait/mobile layout (the board/panel reflow), and
+wiring the `touch` tap-to-select gesture into the board input.
+
 ## 2026-05-31 — Phaser: new music/SFX (menu loop + random game loop)
 
 The user replaced the audio (commit "sound v3" in `view/sounds/`): added

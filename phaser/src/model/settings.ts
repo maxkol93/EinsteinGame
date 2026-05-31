@@ -16,9 +16,19 @@ interface SettingsData {
   // How many of the 6 onboarding blocks the player has cleared (0..6). 6 means
   // the tutorial is done and every game mode is unlocked.
   tutorial_blocks: number;
+  // clue hover tooltips on the board
+  tooltips: boolean;
+  // tap-to-select mode for touch devices (a tap pops; a second tap on the same
+  // candidate defines — no long-press needed)
+  touch: boolean;
+  // accessibility: damp screenshake / slow-mo / particle bursts
+  reduce_motion: boolean;
 }
 
-const DEFAULTS: SettingsData = { unlock_all: false, zen: false, tutorial_blocks: 0 };
+const DEFAULTS: SettingsData = {
+  unlock_all: false, zen: false, tutorial_blocks: 0,
+  tooltips: true, touch: false, reduce_motion: false,
+};
 
 class Settings {
   private data: SettingsData = { ...DEFAULTS };
@@ -31,6 +41,9 @@ class Settings {
         if (typeof s.unlock_all === 'boolean') this.data.unlock_all = s.unlock_all;
         if (typeof s.zen === 'boolean') this.data.zen = s.zen;
         if (typeof s.tutorial_blocks === 'number' && s.tutorial_blocks >= 0) this.data.tutorial_blocks = Math.floor(s.tutorial_blocks);
+        if (typeof s.tooltips === 'boolean') this.data.tooltips = s.tooltips;
+        if (typeof s.touch === 'boolean') this.data.touch = s.touch;
+        if (typeof s.reduce_motion === 'boolean') this.data.reduce_motion = s.reduce_motion;
       }
     } catch {
       /* keep defaults */
@@ -59,6 +72,15 @@ class Settings {
   }
 
   get tutorialDone(): boolean { return this.data.tutorial_blocks >= 6; }
+
+  get tooltips(): boolean { return this.data.tooltips; }
+  set tooltips(v: boolean) { this.data.tooltips = v; this.save(); }
+
+  get touch(): boolean { return this.data.touch; }
+  set touch(v: boolean) { this.data.touch = v; this.save(); }
+
+  get reduceMotion(): boolean { return this.data.reduce_motion; }
+  set reduceMotion(v: boolean) { this.data.reduce_motion = v; this.save(); }
 
   private save(): void {
     try {

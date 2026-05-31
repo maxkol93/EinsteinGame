@@ -90,6 +90,7 @@ export class TutorialScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBackgroundColor(COLORS.bg);
     this.fx = new Fx(this);
+    this.fx.setReduced(settings.reduceMotion);
 
     // the director persists across per-level scene restarts via the registry
     this.dir = this.registry.get('tutorialDirector') as TutorialDirector;
@@ -362,6 +363,7 @@ export class TutorialScene extends Phaser.Scene {
   }
 
   private showTooltip(group: ClueGroup): void {
+    if (!settings.tooltips) return;
     this.hideTooltip();
     const segs = ruleSegments(group.rule);
     const tile = 26;

@@ -32,6 +32,9 @@ export class Fx {
   private vigTween?: Phaser.Tweens.Tween | Phaser.Tweens.TweenChain;
   private celebrateRain?: Phaser.GameObjects.Particles.ParticleEmitter;
   private celebrateTimer?: Phaser.Time.TimerEvent;
+  // accessibility: when set, screenshake / particle bursts / confetti / the
+  // vignette pulse are suppressed; localized rings + flashes still play
+  private reduced = false;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -63,12 +66,17 @@ export class Fx {
     return key;
   }
 
+  setReduced(on: boolean): void {
+    this.reduced = on;
+  }
+
   /** Outward spray — soft round MONOCHROME dots. One feathered circle texture,
    *  one tint, a gentle gravity and a long ease-out fade: a clean, tactile puff
    *  that lingers, instead of a multi-tone confetti of squares and white sparks.
    *  Particle best-practice: ease size→0 and alpha→0 over a long lifespan, low
    *  gravity so they drift and settle, no rotation noise. */
   burst(x: number, y: number, color: number, opts: BurstOpts = {}): void {
+    if (this.reduced) return;
     const count = opts.count ?? 14;
     const speed = opts.speed ?? 300;
     const size = opts.size ?? 5;
@@ -178,6 +186,7 @@ export class Fx {
   }
 
   confetti(count = 48): void {
+    if (this.reduced) return;
     const colors = [0xa87377, 0xa5674c, 0xa58949, 0x788966, 0x5c7476, 0x6c5161, 0xffe282, 0xffffff];
     const e = this.scene.add
       .particles(0, 0, this.chunk, {
@@ -246,6 +255,7 @@ export class Fx {
   // ---- red screen-edge vignette (replaces the old centre red rectangle) ----
 
   vignettePulse(color: number, peak: number): void {
+    if (this.reduced) return;
     this.vignette.setTint(color);
     this.vigTween?.stop();
     this.vigTween = this.scene.tweens.chain({
@@ -272,6 +282,7 @@ export class Fx {
   }
 
   shake(amp: number, durMs: number): void {
+    if (this.reduced) return;
     this.scene.cameras.main.shake(durMs, amp * 0.0012);
   }
 }

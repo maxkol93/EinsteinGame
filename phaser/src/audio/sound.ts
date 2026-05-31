@@ -169,6 +169,21 @@ class AudioManager {
     this.currentKey = undefined;
   }
 
+  // ---- volume (for the menu sliders) ----
+  get sfxVolume(): number { return this.volume; }
+  get musicVolume2(): number { return this.musicVolume; }
+
+  setVolume(v: number): void {
+    this.volume = clamp01(v);
+    this.persist();
+  }
+
+  setMusicVolume(v: number): void {
+    this.musicVolume = clamp01(v);
+    if (this.music) (this.music as Phaser.Sound.WebAudioSound).setVolume?.(this.musicVolume);
+    this.persist();
+  }
+
   // ---- settings getters/setters (for the menu toggles) ----
   get sfxEnabled(): boolean { return this.sfxOn; }
   get musicEnabled(): boolean { return this.musicOn; }

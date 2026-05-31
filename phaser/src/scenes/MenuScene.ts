@@ -1,16 +1,24 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, FONT, palette, applyRenderScale } from '../config';
+import { COLORS, GAME, FONT, palette, brighten, applyRenderScale } from '../config';
 import { makeButton, BtnHandle } from '../ui/button';
-import { roundedTex } from '../ui/textures';
+import { makeSlider } from '../ui/slider';
+import { makeToggle } from '../ui/toggle';
+import { roundedTex, strokedRoundedTex } from '../ui/textures';
 import { audio } from '../audio/sound';
 import { stats } from '../model/stats';
 import { settings } from '../model/settings';
 import { sizeLocks, diffLocks, sizeUnlocked } from '../model/progression';
 import { ACHIEVEMENTS, achievementInfo } from '../model/achievements';
 import { TutorialDirector, BLOCK_NAMES } from '../model/tutorial';
+import { seededConfig, SeededKind } from '../model/daily';
+import { openStatsOverlay } from '../ui/statsOverlay';
 
 const SIZES = [4, 5, 6];
 const DIFFS = ['Easy', 'Normal', 'Hard'];
+const CX_L = 360; // left column centre
+const PANEL_X = 700; // right options panel left edge
+const PANEL_W = 445;
+const CX_R = PANEL_X + PANEL_W / 2;
 
 const SIZE_LOCK_MSG = 'Win 3 puzzles in the previous board size to unlock this.';
 const DIFF_LOCK_MSG = 'Win 3 puzzles in every size of the previous difficulty to unlock this.';
@@ -37,15 +45,11 @@ export class MenuScene extends Phaser.Scene {
   create(): void {
     applyRenderScale(this);
     this.cameras.main.setBackgroundColor(COLORS.bg);
-    const cx = GAME.width / 2;
 
     // Standalone menu plays the menu bed; but when this menu is the pause
     // overlay over a still-paused game, keep that game's loop playing so
     // Continue resumes seamlessly (resume doesn't re-run the game's create).
     if (!this.scene.isPaused('game')) audio.playMusic('menu');
-    this.buildAudioToggles();
-    this.buildZenToggle();
-    this.buildTutorialButton();
 
     // U toggles the debug unlock-all (mirrors pressing U in the pygame build).
     this.input.keyboard?.on('keydown-U', () => {
@@ -54,70 +58,122 @@ export class MenuScene extends Phaser.Scene {
       this.refreshLocks();
     });
 
-    this.add
-      .text(cx, 88, 'EINSTEIN', { fontFamily: FONT, fontStyle: 'bold', fontSize: '76px', color: palette.text })
-      .setOrigin(0.5)
-      .setLetterSpacing(16);
-    this.add
-      .text(cx, 146, 'a logic-grid deduction puzzle', { fontFamily: FONT, fontSize: '20px', color: palette.accent })
-      .setOrigin(0.5);
+    this.buildTitle();
+    this.buildLeftColumn();
+    this.buildOptionsPanel();
+    this.buildProgress();
+    this.refreshLocks();
+  }
 
+  private buildTitle(): void {
+    const cx = GAME.width / 2;
+    this.add.text(cx, 54, 'EINSTEIN', { fontFamily: FONT, fontStyle: 'bold', fontSize: '60px', color: palette.text }).setOrigin(0.5).setLetterSpacing(14);
+    this.add.text(cx, 98, 'a logic-grid deduction puzzle', { fontFamily: FONT, fontSize: '18px', color: palette.accent }).setOrigin(0.5);
     Object.values(COLORS.rows).forEach((color, i, arr) => {
-      this.add.circle(cx - ((arr.length - 1) * 26) / 2 + i * 26, 184, 6, color);
+      this.add.circle(cx - ((arr.length - 1) * 24) / 2 + i * 24, 126, 6, color);
     });
+  }
 
-    this.add.text(cx, 234, 'BOARD SIZE', { fontFamily: FONT, fontSize: '16px', color: palette.accent }).setOrigin(0.5);
+  // ---------------------- left column ----------------------
+
+  private buildLeftColumn(): void {
+    const cx = CX_L;
+
+    this.add.text(cx, 178, 'BOARD SIZE', { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0.5);
     this.sizeBtns = SIZES.map((s, i) => {
-      const w = 150;
-      const x = cx - (SIZES.length - 1) * (w + 16) * 0.5 + i * (w + 16);
-      const b = makeButton(this, x, 278, w, 54, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size });
-      const lock = this.add.text(x + w / 2 - 18, 278, '🔒', { fontSize: '18px' }).setOrigin(0.5).setVisible(false);
+      const w = 118;
+      const x = cx - (SIZES.length - 1) * (w + 12) * 0.5 + i * (w + 12);
+      const b = makeButton(this, x, 212, w, 48, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size });
+      const lock = this.add.text(x + w / 2 - 16, 212, '🔒', { fontSize: '16px' }).setOrigin(0.5).setVisible(false);
       lock.setDepth(b.root.depth + 1);
       this.sizeLockMarks.push(lock);
       return b;
     });
 
-    this.add.text(cx, 348, 'DIFFICULTY', { fontFamily: FONT, fontSize: '16px', color: palette.accent }).setOrigin(0.5);
+    this.add.text(cx, 272, 'DIFFICULTY', { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0.5);
     this.diffBtns = DIFFS.map((d, i) => {
-      const w = 150;
-      const x = cx - (DIFFS.length - 1) * (w + 16) * 0.5 + i * (w + 16);
-      const b = makeButton(this, x, 392, w, 54, d, () => this.selectDiff(i), { selected: i === this.difficulty });
-      const lock = this.add.text(x + w / 2 - 18, 392, '🔒', { fontSize: '18px' }).setOrigin(0.5).setVisible(false);
+      const w = 118;
+      const x = cx - (DIFFS.length - 1) * (w + 12) * 0.5 + i * (w + 12);
+      const b = makeButton(this, x, 306, w, 48, d, () => this.selectDiff(i), { selected: i === this.difficulty });
+      const lock = this.add.text(x + w / 2 - 16, 306, '🔒', { fontSize: '16px' }).setOrigin(0.5).setVisible(false);
       lock.setDepth(b.root.depth + 1);
       this.diffLockMarks.push(lock);
       return b;
     });
 
-    // If a game is paused in the background there's a board to resume, so offer
-    // Continue + New game (pygame's non-`finished` menu); otherwise a single
-    // Play (pygame's `finished` menu — only the path to a fresh board).
+    // Continue + New game when a board is paused, else Play.
     if (this.scene.isPaused('game')) {
-      makeButton(this, cx, 466, 300, 56, '▶  CONTINUE', () => this.continueGame(), {
-        fontSize: 24, fill: COLORS.rows['4'], textColor: '#ffffff',
-      });
-      makeButton(this, cx, 522, 300, 44, 'New game', () => this.play(), { fontSize: 18 });
+      makeButton(this, cx, 376, 380, 52, '▶  CONTINUE', () => this.continueGame(), { fontSize: 22, fill: COLORS.rows['4'], textColor: '#ffffff' });
+      makeButton(this, cx, 422, 380, 40, 'New game', () => this.play(), { fontSize: 17 });
     } else {
-      makeButton(this, cx, 480, 260, 66, 'PLAY', () => this.play(), {
-        fontSize: 28, fill: COLORS.rows['4'], textColor: '#ffffff',
-      });
+      makeButton(this, cx, 392, 380, 60, 'PLAY', () => this.play(), { fontSize: 26, fill: COLORS.rows['4'], textColor: '#ffffff' });
     }
 
-    this.add
-      .text(
-        cx, 566,
-        'Tap a tile to remove a wrong value · right-click or long-press to lock it in.\n' +
-          'Each row is one colour — read the glyph to tell values apart.',
-        { fontFamily: FONT, fontSize: '16px', color: palette.accent, align: 'center', lineSpacing: 6 },
-      )
-      .setOrigin(0.5);
+    // Daily / Weekly / Monthly
+    this.add.text(cx, 466, 'SEEDED CHALLENGES', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
+    const kinds: SeededKind[] = ['daily', 'weekly', 'monthly'];
+    const sw = 124;
+    kinds.forEach((kind, i) => {
+      const x = cx - (kinds.length - 1) * (sw + 8) * 0.5 + i * (sw + 8);
+      makeButton(this, x, 502, sw, 42, this.seededLabel(kind), () => this.playSeeded(kind), { fontSize: 14, fill: brighten(COLORS.panel, 26) });
+    });
 
-    this.buildProgress(cx);
-    this.refreshLocks();
+    this.add.text(cx, 560, 'Tap a tile to pop a wrong value · long-press / right-click to lock it in.', { fontFamily: FONT, fontSize: '13px', color: palette.accent, align: 'center', wordWrap: { width: 420 } }).setOrigin(0.5);
   }
 
-  // ---------------------- progression UI ----------------------
+  private seededLabel(kind: SeededKind): string {
+    const cfg = seededConfig(kind);
+    const block = stats.seeded(kind);
+    const done = block.last === cfg.period;
+    const name = kind[0].toUpperCase() + kind.slice(1);
+    return `${name} #${cfg.number}${done ? '  ✓' : ''}`;
+  }
 
-  private buildProgress(cx: number): void {
+  private playSeeded(kind: SeededKind): void {
+    if (settings.zen) { this.showNotice('Seeded puzzles are unavailable in Zen mode — turn Zen off.'); return; }
+    const cfg = seededConfig(kind);
+    if (this.scene.isPaused('game') || this.scene.isSleeping('game')) this.scene.stop('game');
+    this.scene.start('game', { size: cfg.size, difficulty: cfg.difficulty, seed: cfg.seed, seededKind: kind, seededPeriod: cfg.period });
+  }
+
+  // ---------------------- right options panel ----------------------
+
+  private buildOptionsPanel(): void {
+    const px = PANEL_X;
+    const py = 168;
+    const pw = PANEL_W;
+    const ph = 408;
+    this.add.image(px, py, roundedTex(this, pw, ph, 18)).setOrigin(0, 0).setTint(brighten(COLORS.bg, 11));
+    this.add.image(px, py, strokedRoundedTex(this, pw, ph, 18, 2)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 30));
+    this.add.text(px + pw / 2, py + 24, 'O P T I O N S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(2);
+
+    const ix = px + 28;
+    const iw = pw - 56;
+    let y = py + 48;
+
+    makeSlider(this, ix, y, iw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v));
+    y += 52;
+    makeSlider(this, ix, y, iw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v));
+    y += 56;
+
+    makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
+    y += 34;
+    makeToggle(this, ix, y, iw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
+    y += 34;
+    makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; });
+    y += 34;
+    makeToggle(this, ix, y, iw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
+    y += 44;
+
+    const half = (iw - 12) / 2;
+    makeButton(this, ix + half / 2, y, half, 44, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 16 });
+    makeButton(this, ix + half + 12 + half / 2, y, half, 44, '☆  Progress', () => openStatsOverlay(this), { fontSize: 16 });
+  }
+
+  // ---------------------- progress (bottom) ----------------------
+
+  private buildProgress(): void {
+    const cx = GAME.width / 2;
     const earned = new Set(stats.achievements);
     this.add
       .text(cx, 626,
@@ -125,7 +181,6 @@ export class MenuScene extends Phaser.Scene {
         { fontFamily: FONT, fontStyle: 'bold', fontSize: '17px', color: palette.text })
       .setOrigin(0.5);
 
-    // a row of badge stars: gold if earned, dim if not; hover shows name + desc.
     const gap = 46;
     const startX = cx - ((ACHIEVEMENTS.length - 1) * gap) / 2;
     ACHIEVEMENTS.forEach((a, i) => {
@@ -217,33 +272,6 @@ export class MenuScene extends Phaser.Scene {
     this.scene.stop();
   }
 
-  /** Zen toggle (top-left, mirroring the audio toggles): a calm, no-lives
-   *  solve. The state persists; PLAY then launches the board in Zen mode. */
-  private buildZenToggle(): void {
-    const w = 156;
-    const x = w / 2 + 24;
-    let zen: BtnHandle;
-    zen = makeButton(this, x, 40, w, 40, this.zenLabel(), () => {
-      settings.zen = !settings.zen;
-      zen.setSelected(settings.zen);
-      zen.setText(this.zenLabel());
-      this.showNotice(settings.zen ? 'Zen on — no lives, just solve' : 'Zen off');
-    }, { fontSize: 15, selected: settings.zen });
-  }
-
-  private zenLabel(): string {
-    return settings.zen ? '☯  ZEN ON' : '☯  ZEN OFF';
-  }
-
-  /** Top-left tutorial button (under the Zen toggle): replays the onboarding,
-   *  or resumes it if the player left part-way through. */
-  private buildTutorialButton(): void {
-    const w = 156;
-    const x = w / 2 + 24;
-    const label = settings.tutorialDone ? '↺  TUTORIAL' : '▶  TUTORIAL';
-    makeButton(this, x, 88, w, 40, label, () => this.openBlockSelect(), { fontSize: 15 });
-  }
-
   /** Pick a tutorial block to play/replay (port of pygame BlockSelectOverlay). */
   private openBlockSelect(): void {
     const cx = GAME.width / 2;
@@ -288,32 +316,5 @@ export class MenuScene extends Phaser.Scene {
       .setDepth(40);
     const n = this.notice;
     this.tweens.add({ targets: n, alpha: 0, delay: 2200, duration: 600, onComplete: () => n.destroy() });
-  }
-
-  // ---------------------- audio toggles ----------------------
-
-  private buildAudioToggles(): void {
-    const w = 132;
-    const x = GAME.width - w / 2 - 24;
-    let sfx: BtnHandle;
-    let music: BtnHandle;
-    sfx = makeButton(this, x, 40, w, 40, this.sfxLabel(), () => {
-      audio.setSfxEnabled(!audio.sfxEnabled);
-      sfx.setSelected(audio.sfxEnabled);
-      sfx.setText(this.sfxLabel());
-    }, { fontSize: 15, selected: audio.sfxEnabled });
-    music = makeButton(this, x, 88, w, 40, this.musicLabel(), () => {
-      audio.setMusicEnabled(!audio.musicEnabled);
-      music.setSelected(audio.musicEnabled);
-      music.setText(this.musicLabel());
-    }, { fontSize: 15, selected: audio.musicEnabled });
-  }
-
-  private sfxLabel(): string {
-    return audio.sfxEnabled ? '♪  SFX ON' : '·  SFX OFF';
-  }
-
-  private musicLabel(): string {
-    return audio.musicEnabled ? '♫  MUSIC ON' : '·  MUSIC OFF';
   }
 }

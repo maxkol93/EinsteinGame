@@ -10,6 +10,8 @@ import { Fx } from '../fx/fx';
 import { audio } from '../audio/sound';
 import { stats, parTime } from '../model/stats';
 import { evaluate, achievementInfo } from '../model/achievements';
+import { SeededKind } from '../model/daily';
+import { settings } from '../model/settings';
 
 // Layout mirrors the pygame landscape build (view/window.py).
 const SPAN = 615;
@@ -77,6 +79,8 @@ export class GameScene extends Phaser.Scene {
   private seed = 0;
   private isRetry = false;
   private zen = false;
+  private seededKind?: SeededKind;
+  private seededPeriod?: number;
 
   // results filled in at finish(), read by showEndPanel()
   private bestText: string | null = null;
@@ -122,12 +126,14 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
-  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean; zen?: boolean }): void {
+  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean; zen?: boolean; seededKind?: SeededKind; seededPeriod?: number }): void {
     this.size = data?.size ?? 4;
     this.difficulty = data?.difficulty ?? 0;
     this.seed = data?.seed ?? 0;
     this.isRetry = !!data?.retry;
     this.zen = !!data?.zen;
+    this.seededKind = data?.seededKind;
+    this.seededPeriod = data?.seededPeriod;
     this.bestText = null;
     this.newRecord = false;
     this.freshBadges = [];
@@ -152,6 +158,7 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBackgroundColor(COLORS.bg);
     this.fx = new Fx(this);
+    this.fx.setReduced(settings.reduceMotion);
 
     TILE = roundedTex(this, 80, 80, 16);
     MINI = roundedTex(this, 64, 64, 12);
@@ -238,8 +245,13 @@ export class GameScene extends Phaser.Scene {
     }
 
     const cplx = COMPLEXITY[this.size][this.difficulty];
+    const modeLabel = this.seededKind
+      ? `${this.seededKind.toUpperCase()}  ·  ${this.size}×${this.size}`
+      : this.zen
+        ? `ZEN  ·  ${this.size}×${this.size}`
+        : `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`;
     this.add
-      .text(PANEL / 2, 268, this.zen ? `ZEN  ·  ${this.size}×${this.size}` : `${DIFF[this.difficulty]}  ·  ${this.size}×${this.size}`, {
+      .text(PANEL / 2, 268, modeLabel, {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text,
       })
       .setOrigin(0.5);
@@ -1021,6 +1033,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showTooltip(group: ClueGroup): void {
+    if (!settings.tooltips) return;
     this.hideTooltip();
     const segs = ruleSegments(group.rule);
     const tile = 26;
@@ -1092,8 +1105,15 @@ export class GameScene extends Phaser.Scene {
 
     this.recordResult(won);
 
-    if (won) { this.fx.celebrate(); audio.play('win'); }
-    else { this.fx.defeat(); audio.play('lose'); }
+    if (won) {
+      this.fx.celebrate();
+      audio.play('win');
+    } else {
+      this.fx.defeat();
+      // the fatal move already fired 'wrong' this same frame; let it breathe so
+      // the lose sting isn't masked by (and audible over) the wrong sound
+      this.time.delayedCall(320, () => audio.play('lose'));
+    }
 
     this.time.delayedCall(won ? 260 : 220, () => this.showEndPanel(won));
   }
@@ -1113,8 +1133,15 @@ export class GameScene extends Phaser.Scene {
     }
     if (won) {
       const prevBest = stats.recordWin(this.difficulty, this.size, this.seconds, true);
+      // a seeded puzzle additionally records into its own daily/weekly/monthly
+      // block and shows its own best time
+      let seededBest: number | null = null;
+      if (this.seededKind && this.seededPeriod !== undefined) {
+        stats.recordSeeded(this.seededKind, this.seededPeriod, this.seconds);
+        seededBest = stats.seeded(this.seededKind).best_time;
+      }
       this.newRecord = prevBest === null || this.seconds < prevBest;
-      const best = stats.bestFor(this.difficulty, this.size);
+      const best = this.seededKind ? seededBest : stats.bestFor(this.difficulty, this.size);
       this.bestText = best ? this.fmt(best) : null;
       const fresh = stats.unlock(
         evaluate({
@@ -1126,6 +1153,7 @@ export class GameScene extends Phaser.Scene {
           size: this.size,
           difficulty: this.difficulty,
           winStreak: stats.winStreak,
+          dailyStreak: stats.seeded('daily').streak,
           zen: false,
         }),
       );
