@@ -109,9 +109,12 @@ export class Fx {
     }
   }
 
-  /** Expanding stroked shockwave ring. */
+  /** Expanding stroked shockwave ring — ADDITIVE (like pygame's BLEND_RGBA_ADD
+   *  Ring), so it reads as bright light radiating outward on the dark board,
+   *  not a faint hairline that gets lost under the particle burst. */
   ring(x: number, y: number, color: number, maxR: number, life = 400, width = 4, startR = 2): void {
-    const g = this.scene.add.graphics().setDepth(58);
+    const g = this.scene.add.graphics().setDepth(62);
+    g.setBlendMode(Phaser.BlendModes.ADD);
     const c = brighten(color, 70);
     this.scene.tweens.addCounter({
       from: 0, to: 1, duration: life, ease: 'Cubic.easeOut',
@@ -119,8 +122,13 @@ export class Fx {
         const t = tw.getValue() ?? 0;
         const r = startR + (maxR - startR) * t;
         g.clear();
-        g.lineStyle(Math.max(1, width * (1 - t * 0.7)), c, 0.9 * (1 - t) ** 1.5);
+        // extra width + a faint inner echo so the wave is unmistakable
+        g.lineStyle(Math.max(1.5, (width + 1) * (1 - t * 0.6)), c, 0.95 * (1 - t) ** 1.3);
         g.strokeCircle(x, y, r);
+        if (r > 6) {
+          g.lineStyle(Math.max(1, width * 0.5 * (1 - t)), 0xffffff, 0.5 * (1 - t) ** 1.5);
+          g.strokeCircle(x, y, r * 0.82);
+        }
       },
       onComplete: () => g.destroy(),
     });

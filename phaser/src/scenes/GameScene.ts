@@ -50,19 +50,24 @@ interface BigCell {
   cy: number;
   base: number;
 }
-interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; value: number; scale: number; }
+interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image; value: number; scale: number; }
 interface PressInfo { y: number; x: number; n: number; fired: boolean; }
 interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; }
 
 // A uniform "highlightable" used by the cross-hover system (board chips, big
-// cells and clue minis all reduce to this).
+// cells and clue minis all reduce to this). tintBase/tintHi are the rest/hover
+// tints: white-textured chips tint to their row colour, but a big cell's colour
+// is BAKED into its texture, so it must stay 0xffffff (tinting it by the colour
+// multiplies → it darkens, the bug where cells changed colour after hover).
 interface Glowable {
   img: Phaser.GameObjects.Image;
   txt?: Phaser.GameObjects.Text;
   outline?: Phaser.GameObjects.Image;
-  color: number;
+  tintBase: number;
+  tintHi: number;
   scale: number;
   homeY: number;
+  canHop: boolean; // clue minis only glow — they must not hop on the board
 }
 
 export class GameScene extends Phaser.Scene {
@@ -108,6 +113,7 @@ export class GameScene extends Phaser.Scene {
   private gameOver = false;
   private press: PressInfo | null = null;
   private longPress?: Phaser.Time.TimerEvent;
+  private hintActive: { restore: () => void } | null = null;
 
   constructor() {
     super('game');
@@ -128,6 +134,7 @@ export class GameScene extends Phaser.Scene {
     this.busy = false;
     this.gameOver = false;
     this.press = null;
+    this.hintActive = null;
     this.hearts = [];
     this.clueGroups = [];
     this.tooltip = undefined;
@@ -174,6 +181,8 @@ export class GameScene extends Phaser.Scene {
 
     audio.startMusic();
     audio.play('start');
+
+    this.playEntrance();
 
     if (this.board.isWon) this.time.delayedCall(250, () => this.finish(true));
   }
@@ -306,6 +315,36 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Cascade entrance: cells are born diagonally (pygame _cell_t_birth =
+   *  (y+x)*step), fading + scaling in with a little overshoot. Input is held
+   *  until the wave finishes. */
+  private playEntrance(): void {
+    const STEP = 45;
+    let maxDelay = 0;
+    this.busy = true;
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const delay = (y + x) * STEP;
+        maxDelay = Math.max(maxDelay, delay);
+        const big = this.bigObjs[y][x];
+        const pairs: Array<{ o: Phaser.GameObjects.Image | Phaser.GameObjects.Text; home: number }> = [];
+        if (big) {
+          pairs.push({ o: big.img, home: big.base }, { o: big.txt, home: 1 });
+        } else {
+          for (const c of this.chips[y][x].values()) pairs.push({ o: c.img, home: c.base }, { o: c.txt, home: 1 });
+        }
+        for (const { o, home } of pairs) {
+          o.setScale(home * 0.5).setAlpha(0);
+          this.tweens.add({
+            targets: o, scaleX: home, scaleY: home, alpha: 1,
+            delay, duration: 260, ease: 'Back.easeOut',
+          });
+        }
+      }
+    }
+    this.time.delayedCall(maxDelay + 280, () => { this.busy = false; });
+  }
+
   private candSlots(y: number, x: number): Array<{ value: number; cx: number; cy: number; sub: number }> {
     const cols = this.candCols;
     const rows = this.candRows;
@@ -356,15 +395,19 @@ export class GameScene extends Phaser.Scene {
   // ---------------------- cross-highlight hover ----------------------
 
   private chipGlow(c: Chip): Glowable {
-    return { img: c.img, txt: c.txt, outline: c.outline, color: rowColor(c.value), scale: c.base, homeY: c.cy };
+    const col = rowColor(c.value);
+    return { img: c.img, txt: c.txt, outline: c.outline, tintBase: col, tintHi: brighten(col, 56), scale: c.base, homeY: c.cy, canHop: true };
   }
 
   private bigGlow(b: BigCell): Glowable {
-    return { img: b.img, txt: b.txt, outline: b.outline, color: rowColor(b.value), scale: b.base, homeY: b.cy };
+    // colour is baked into the big-cell texture — keep the tint neutral (white)
+    // both at rest and on hover; the glow reads via the outline + scale instead.
+    return { img: b.img, txt: b.txt, outline: b.outline, tintBase: 0xffffff, tintHi: 0xffffff, scale: b.base, homeY: b.cy, canHop: true };
   }
 
   private clueGlow(m: ClueMini): Glowable {
-    return { img: m.img, txt: m.txt, color: rowColor(m.value), scale: m.scale, homeY: m.img.y };
+    const col = rowColor(m.value);
+    return { img: m.img, txt: m.txt, outline: m.outline, tintBase: col, tintHi: brighten(col, 56), scale: m.scale, homeY: m.img.y, canHop: false };
   }
 
   /** Every highlightable on screen whose value is in `values`. */
@@ -392,12 +435,12 @@ export class GameScene extends Phaser.Scene {
     const scalers = [g.img, g.outline].filter(Boolean) as Phaser.GameObjects.GameObject[];
     this.tweens.killTweensOf(movers);
     if (on) {
-      g.img.setTint(brighten(g.color, 56));
+      g.img.setTint(g.tintHi);
       if (g.outline) g.outline.setAlpha(0.7);
       this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
-      if (hop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+      if (hop && g.canHop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
     } else {
-      g.img.setTint(g.color);
+      g.img.setTint(g.tintBase);
       if (g.outline) this.tweens.add({ targets: g.outline, alpha: 0, duration: 120 });
       this.tweens.add({ targets: scalers, scaleX: g.scale, scaleY: g.scale, duration: 120 });
       this.tweens.add({ targets: movers, y: g.homeY, duration: 120 });
@@ -559,6 +602,7 @@ export class GameScene extends Phaser.Scene {
     if (this.busy || this.gameOver) return;
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
+    this.clearHint(); // any move dismisses the hint highlight
     this.hoverEnd(); // drop any highlight before the board mutates
     const correct = this.board.isAnswer(y, x, n);
     if (isDefine ? !correct : correct) {
@@ -608,6 +652,10 @@ export class GameScene extends Phaser.Scene {
       this.time.delayedCall(120, () => this.fx.comboText(cx, cy - 8, `+${cs.resolved.length} chain!`));
     }
 
+    // any clue whose values are now all solved auto-dims (matches the board
+    // state immediately; the big cells animate in over the cascade)
+    this.autoDimClues();
+
     if (cs.resolved.length > 0 || cs.struck.length > 1) {
       this.busy = true;
       this.time.delayedCall(maxStep * STEP_MS + 420, () => {
@@ -645,28 +693,151 @@ export class GameScene extends Phaser.Scene {
     if (this.lives <= 0) this.finish(false);
   }
 
-  private hint(): void {
-    if (this.busy || this.gameOver) return;
-    // a safe pop: any candidate that is NOT the answer can be removed
+  // --------------------------- hint ---------------------------
+  // Port of window.py find_hint_target / _rule_eliminates / show_hint: ring a
+  // candidate that an *unsatisfied clue* logically forbids (and light that clue
+  // so the player sees WHY), falling back to a solution-derived safe pop. The
+  // highlight persists until the player's next move (clearHint).
+
+  private valueAtCell(y: number, x: number, n: number): boolean {
+    const cell = this.board.cells[y]?.[x];
+    if (!cell) return false;
+    return cell.value !== null ? cell.value === n : cell.candidates.includes(n);
+  }
+
+  private candidateButton(y: number, x: number, n: number): Chip | null {
+    const cell = this.board.cells[y]?.[x];
+    if (!cell || cell.value !== null || !cell.candidates.includes(n)) return null;
+    return this.chips[y][x].get(n) ?? null;
+  }
+
+  private valueColumns(n: number): number[] {
+    const y = Math.floor(n / 10) - 1;
+    if (y < 0 || y >= this.size) return [];
+    const cols: number[] = [];
+    for (let x = 0; x < this.size; x++) if (this.valueAtCell(y, x, n)) cols.push(x);
+    return cols;
+  }
+
+  private ruleSatisfied(values: Rule): boolean {
+    return values.every((v) => typeof v !== 'number' || this.valueSolved(v));
+  }
+
+  /** A still-active candidate the clue forbids, with the clue as the reason. */
+  private ruleEliminates(group: ClueGroup): { chip: Chip; group: ClueGroup } | null {
+    const [a, b, c] = group.rule;
+    if (b === '^' && typeof a === 'number' && typeof c === 'number') {
+      const ya = Math.floor(a / 10) - 1;
+      const yc = Math.floor(c / 10) - 1;
+      for (let x = 0; x < this.size; x++) {
+        if (!this.valueAtCell(ya, x, a)) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group }; }
+        if (!this.valueAtCell(yc, x, c)) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group }; }
+      }
+      return null;
+    }
+    if (b === '<->' && typeof a === 'number' && typeof c === 'number') {
+      const ya = Math.floor(a / 10) - 1;
+      const yc = Math.floor(c / 10) - 1;
+      for (let x = 0; x < this.size; x++) {
+        if (this.valueAtCell(ya, x, a)) {
+          const has = (x > 0 && this.valueAtCell(yc, x - 1, c)) || (x < this.size - 1 && this.valueAtCell(yc, x + 1, c));
+          if (!has) { const btn = this.candidateButton(ya, x, a); if (btn) return { chip: btn, group }; }
+        }
+        if (this.valueAtCell(yc, x, c)) {
+          const has = (x > 0 && this.valueAtCell(ya, x - 1, a)) || (x < this.size - 1 && this.valueAtCell(ya, x + 1, a));
+          if (!has) { const btn = this.candidateButton(yc, x, c); if (btn) return { chip: btn, group }; }
+        }
+      }
+      return null;
+    }
+    if (b === '...' && typeof a === 'number' && typeof c === 'number') {
+      const aCols = this.valueColumns(a);
+      const cCols = this.valueColumns(c);
+      if (!aCols.length || !cCols.length) return null;
+      const maxC = Math.max(...cCols);
+      const minC = Math.min(...cCols);
+      for (const x of aCols) if (x >= maxC) { const btn = this.candidateButton(Math.floor(a / 10) - 1, x, a); if (btn) return { chip: btn, group }; }
+      for (const x of cCols) if (x <= minC && x <= Math.min(...aCols)) { const btn = this.candidateButton(Math.floor(c / 10) - 1, x, c); if (btn) return { chip: btn, group }; }
+      return null;
+    }
+    // triple — lean on the known answer: ring an active candidate the solution
+    // rules out, with the triple clue as the reason.
+    if (typeof a === 'number' && typeof b === 'number' && typeof c === 'number') {
+      for (const v of [a, b, c]) {
+        const y = Math.floor(v / 10) - 1;
+        for (let x = 0; x < this.size; x++) {
+          const btn = this.candidateButton(y, x, v);
+          if (btn && this.board.solution[y][x] !== v) return { chip: btn, group };
+        }
+      }
+    }
+    return null;
+  }
+
+  private findHintTarget(): { chip: Chip; group: ClueGroup | null } | null {
+    for (const group of this.clueGroups) {
+      if (group.dim) continue;
+      if (this.ruleSatisfied(group.rule)) continue;
+      const res = this.ruleEliminates(group);
+      if (res) return res;
+    }
+    // fallback: a guaranteed-safe candidate from the answer grid
     for (let y = 0; y < this.size; y++) {
       for (let x = 0; x < this.size; x++) {
         const cell = this.board.cells[y][x];
-        if (cell.value !== null) continue;
-        const safe = cell.candidates.find((v) => !this.board.isAnswer(y, x, v));
-        if (safe === undefined) continue;
-        const chip = this.chips[y][x].get(safe);
-        if (!chip) continue;
-        this.fx.ring(chip.cx, chip.cy, 0xffd678, 34, 560, 4);
-        this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
-        chip.outline.setAlpha(0.95);
-        this.tweens.add({ targets: [chip.img, chip.outline], scaleX: chip.base * 1.16, scaleY: chip.base * 1.16, duration: 200, yoyo: true, repeat: 2 });
-        this.tweens.add({ targets: chip.txt, scaleX: 1.16, scaleY: 1.16, duration: 200, yoyo: true, repeat: 2 });
-        // one-shot hop (pygame trigger_hop) so the indirectly-lit cell jumps
-        this.tweens.add({ targets: [chip.img, chip.txt, chip.outline], y: chip.cy - 12, duration: 220, yoyo: true, ease: 'Quad.easeOut' });
-        this.tweens.add({ targets: chip.outline, alpha: 0, delay: 760, duration: 320 });
-        return;
+        if (cell.value !== null || cell.candidates.length <= 1) continue;
+        const correct = this.board.solution[y][x];
+        const n = cell.candidates.find((v) => v !== correct);
+        if (n === undefined) continue;
+        const chip = this.chips[y][x].get(n);
+        if (chip) return { chip, group: null };
       }
     }
+    return null;
+  }
+
+  private clearHint(): void {
+    if (!this.hintActive) return;
+    this.hintActive.restore();
+    this.hintActive = null;
+  }
+
+  private hint(): void {
+    if (this.busy || this.gameOver) return;
+    this.clearHint();
+    const target = this.findHintTarget();
+    if (!target) return;
+    const { chip, group } = target;
+
+    audio.play('spread');
+    this.fx.ring(chip.cx, chip.cy, 0xffd678, 36, 560, 4);
+    this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+    chip.outline.setTint(0xffd678).setAlpha(0.95);
+    const pulse = this.tweens.add({
+      targets: [chip.img, chip.outline], scaleX: chip.base * 1.14, scaleY: chip.base * 1.14,
+      duration: 460, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+    });
+    const pulseTxt = this.tweens.add({
+      targets: chip.txt, scaleX: 1.14, scaleY: 1.14,
+      duration: 460, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+    });
+
+    const clueGlows: Glowable[] = group ? group.minis.map((m) => this.clueGlow(m)) : [];
+    for (const g of clueGlows) this.glow(g, true, false);
+
+    this.hintActive = {
+      restore: () => {
+        pulse.stop();
+        pulseTxt.stop();
+        this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+        if (chip.img.active) {
+          chip.img.setScale(chip.base).setTint(rowColor(chip.value));
+          chip.txt.setScale(1);
+          chip.outline.setScale(chip.base).setTint(0xffffff).setAlpha(0);
+        }
+        for (const g of clueGlows) this.glow(g, false, false);
+      },
+    };
   }
 
   // --------------------------- clues ---------------------------
@@ -706,11 +877,14 @@ export class GameScene extends Phaser.Scene {
       const sy = gy + RULE_CELL / 2;
       if (typeof v === 'number') {
         const img = this.add.image(sx, sy, MINI).setDisplaySize(RULE_CELL - 3, RULE_CELL - 3).setTint(rowColor(v));
+        const outline = this.add
+          .image(sx, sy, strokedRoundedTex(this, 64, 64, 12, 5))
+          .setScale(miniScale).setTint(0xffffff).setAlpha(0);
         const t = this.add
           .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '19px', color: '#ffffff' })
           .setOrigin(0.5);
-        objs.push(img, t);
-        minis.push({ img, txt: t, value: v, scale: miniScale });
+        objs.push(img, outline, t);
+        minis.push({ img, txt: t, outline, value: v, scale: miniScale });
       } else {
         const t = this.add
           .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: palette.accent })
@@ -740,6 +914,31 @@ export class GameScene extends Phaser.Scene {
       group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
       if (group.dim && this.hoverSource === group) this.hoverEnd();
     });
+  }
+
+  /** True once value `n` sits in a solved big cell (board state, not the
+   *  delayed visuals). Mirrors window.py `_value_solved`. */
+  private valueSolved(n: number): boolean {
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        if (this.board.cells[y][x].value === n) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Press (dim) any clue whose every referenced value is now solved — the
+   *  constraint is concrete and can't teach anything more. Port of
+   *  window.py auto_dim_satisfied_rules; called after every board change. */
+  private autoDimClues(): void {
+    for (const group of this.clueGroups) {
+      if (group.dim) continue;
+      const satisfied = group.rule.every((v) => typeof v !== 'number' || this.valueSolved(v));
+      if (!satisfied) continue;
+      group.dim = true;
+      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(0.32));
+      if (this.hoverSource === group) this.hoverEnd();
+    }
   }
 
   private showTooltip(group: ClueGroup): void {
@@ -774,7 +973,8 @@ export class GameScene extends Phaser.Scene {
     const ph = lineH * lines.length + pad * 2;
 
     const objs: Phaser.GameObjects.GameObject[] = [];
-    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 32)).setAlpha(0.96);
+    // semi-transparent so the board stays readable behind the tooltip
+    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.82);
     objs.push(bg);
     lines.forEach((ln, li) => {
       let x = pad;

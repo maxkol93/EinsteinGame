@@ -2,6 +2,44 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: polish pass (10 visual/behaviour fixes vs pygame)
+
+Fixed a player-reported list of port divergences (visuals + feel). Files:
+`scenes/GameScene.ts`, `fx/fx.ts`, `ui/button.ts`, `ui/textures.ts`, `main.ts`.
+
+1. **Big cells darkened after hover** — the colour is baked into the big-cell
+   texture, so `glow` tinting it by the row colour multiplied → darkening.
+   `Glowable` now carries `tintBase`/`tintHi`; big cells stay `0xffffff` and
+   glow via outline+scale only. (Verified: tint stays `ffffff` after hover.)
+2. **Clue minis had no outline on highlight** — added a stroked-rounded outline
+   image per clue mini; `clueGlow` lights it like a board chip.
+3. **No radial shockwave rings** — `fx.ring` now draws ADDITIVE
+   (`BlendModes.ADD`, like pygame's `BLEND_RGBA_ADD`), wider, with a faint inner
+   echo, so the wave reads on resolve and on small pops.
+4. **Clue minis hopped on hover** — `Glowable.canHop` gates the hop; board chips
+   hop, clue minis only glow.
+5. **Blurry text fullscreen** — under `Scale.FIT` the 1295×735 buffer is
+   stretched. Patched the Text factory to render every label at higher internal
+   resolution (`devicePixelRatio*1.5`, capped 4) + `render.roundPixels`.
+6. **Menu buttons didn't lift** — `makeButton` now has a soft drop shadow; on
+   hover the face lifts and the shadow deepens (was a flat brighten).
+7. **Hint reworked** — full port of `find_hint_target`/`_rule_eliminates`: rings
+   a candidate an *unsatisfied clue* logically forbids AND lights that clue;
+   falls back to a solution-safe pop. The highlight **persists until the next
+   move** (`clearHint` on any action) instead of auto-fading.
+8. **No board entrance** — `playEntrance` births cells diagonally
+   ((y+x)·45 ms) with fade+scale overshoot (pygame `_cell_t_birth`); input held
+   until the wave finishes.
+9. **Clues didn't auto-deactivate** — ported `auto_dim_satisfied_rules`: after
+   every change, a clue whose every value is now solved dims. (Verified: 2/2
+   clues dim on solve.)
+10. **Opaque tooltips** — dropped the tooltip bg to alpha 0.82 so the board
+    shows through.
+
+Verified: `typecheck` clean, `verify` green (zero console errors), screenshots
+confirm the lift/shadow, crisp text, persistent hint, semi-transparent tooltip.
+Model untouched, so the generator/solver audit + smoke still hold.
+
 ## 2026-05-31 — Phaser: port-faithfulness audit & fixes
 
 Audited the pygame→TS port (cascade, solver, generator, decoder, RNG, stats/
