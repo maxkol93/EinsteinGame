@@ -258,9 +258,15 @@ export class SelfWalkthrough {
       } else if (!defined.has(0)) {
         curX = defined.get(1)! + (defined.get(1)! - defined.get(2)!);
         curInd = 0;
-      } else {
+      } else if (!defined.has(2)) {
         curX = defined.get(1)! + (defined.get(1)! - defined.get(0)!);
         curInd = 2;
+      } else {
+        // keys {0,2} with the columns not 2 apart — an inconsistent mid-
+        // deduction state. Python leaves cur_x/cur_ind unbound (it would
+        // raise); rather than define a NaN column, do nothing. (Matches
+        // self_walkthrough.py: only the `0 not in` / `2 not in` branches act.)
+        return;
       }
       this.defineThisCell(Math.floor(rule[curInd] / 10) - 1, curX, rule[curInd]);
     }

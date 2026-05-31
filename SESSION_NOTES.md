@@ -2,6 +2,41 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: port-faithfulness audit & fixes
+
+Audited the pygame→TS port (cascade, solver, generator, decoder, RNG, stats/
+progression/zen) for incorrect translations. Most of it is faithful; fixed the
+two real divergences found.
+
+- **Fixed (med) — starter-clue pairing desync** (`fieldAndRules.ts`
+  `generateStartRules`). The pygame loop `while len: for num in min_nums:`
+  mutates the list *during* iteration, so CPython's index-based iterator skips
+  the element shifted into the current slot; the TS port used `shift()` (always
+  index 0, no skip) and `randint` instead of `choice`. Different pairs + a
+  different RNG-consumption order. Harmless for random play (the solver still
+  grows every board to solvable — smoke stays 270/270), but it would desync the
+  future Daily/Weekly/Monthly, where CLAUDE.md requires the versions to match.
+  Now replicates CPython's mutate-during-iterate exactly (index walked over the
+  live list, `choice` not `randint`). See `field_and_rules.py:82-92`.
+- **Fixed (low) — `defineOther` two-defined branch** (`selfWalkthrough.ts`). A
+  trailing `else` also caught the `{0,2}` key case (middle unplaced), where
+  `defined.get(1)` is `undefined` → `curX = NaN` fed into `defineThisCell`.
+  Python only acts in its `0 not in` / `2 not in` branches (the `{0,2}` case
+  leaves it unbound). Now mirrors that with an explicit `else if (!has(2))` and
+  a no-op fallback. Pathological mid-deduction state (unreachable in normal
+  play), but it was a genuine branch-translation error.
+- **Verified faithful (no change):** the cascade/board state machine (order of
+  strike → big-cell → row-clear → re-check all match; the duplicate guard is if
+  anything *safer* than pygame's blank-the-cell bug), the solver's operator
+  clues incl. the known `and`/`or` precedence fix, the generator caps/trim, the
+  36-glyph decoder table (codepoint-for-codepoint), `randint` inclusivity, and
+  the COMPLEXITY "cells given" table.
+- **Intentional, not a bug:** clue-tooltip wording was shortened for the
+  compact Phaser tooltip ("same column as" vs "is in the same column as", etc.)
+  — structurally the same segments; left as-is.
+- **Checked:** `npm run typecheck` clean, `npm run smoke` 270/270 (avg 9.7
+  clues, unchanged), `npm run verify` green with zero console errors.
+
 ## 2026-05-31 — Phaser: Zen mode
 
 Ported Zen — a calm, no-lives solve. Faithful to presenter.py's `_zen` flag.

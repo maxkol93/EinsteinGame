@@ -93,19 +93,33 @@ export class FieldAndRules {
       this.minNums.splice(idx, 1);
     }
 
-    // pair the rest into minimal starting clues
+    // Pair the rest into minimal starting clues. This MUST mirror CPython's
+    // `while len: for num in min_nums:` where the body mutates min_nums.
+    // CPython's list iterator is index-based: `remove(num)` shifts the next
+    // element into the current slot, and the iterator's ++index then SKIPS it.
+    // We replicate that exactly — an index `i` walked over the live list, not a
+    // fresh `shift()` each pass — so the clue pairing and the RNG-consumption
+    // order it drives match the pygame generator (`choice`, not `randint`).
+    // (Required for Daily parity once a CPython-MT RNG is swapped in; harmless
+    // re-pairing for normal random play, which the solver still grows to
+    // solvable.) See field_and_rules.py:82-92.
     while (this.minNums.length) {
-      if (this.minNums.length === 1) {
-        const num = this.minNums.shift()!;
-        this.createStartRule(num, [
-          this.rng.randint(0, this.size - 1),
-          this.rng.randint(0, this.size - 1),
-        ]);
-      } else {
-        const num = this.minNums.shift()!;
-        const ri = this.rng.randint(0, this.minNums.length - 1);
-        const rand = this.minNums.splice(ri, 1)[0];
-        this.createStartRule(num, rand);
+      let i = 0;
+      while (i < this.minNums.length) {
+        const num = this.minNums[i];
+        if (this.minNums.length !== 1) {
+          this.minNums.splice(this.minNums.indexOf(num), 1);
+          const rand = this.rng.choice(this.minNums);
+          this.minNums.splice(this.minNums.indexOf(rand), 1);
+          this.createStartRule(num, rand);
+        } else {
+          this.minNums.splice(this.minNums.indexOf(num), 1);
+          this.createStartRule(num, [
+            this.rng.randint(0, this.size - 1),
+            this.rng.randint(0, this.size - 1),
+          ]);
+        }
+        i += 1; // the for-loop advances past the (now-shifted) slot
       }
     }
   }
