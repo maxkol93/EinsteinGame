@@ -3,3 +3,6 @@ __pycache__/
 build/
 einsteingame-itch.zip
 einstein-phaser-itch.zip
+
+# Regenerable promo intermediates (rebuild via phaser/tools/promo/capture.mjs)
+itch-assets/raw/
