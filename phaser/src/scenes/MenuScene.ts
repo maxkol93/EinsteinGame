@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS, GAME, FONT, palette } from '../config';
 import { makeButton, BtnHandle } from '../ui/button';
+import { audio } from '../audio/sound';
 
 const SIZES = [4, 5, 6];
 const DIFFS = ['Easy', 'Normal', 'Hard'];
@@ -23,6 +24,9 @@ export class MenuScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.setBackgroundColor(COLORS.bg);
     const cx = GAME.width / 2;
+
+    audio.startMusic();
+    this.buildAudioToggles();
 
     this.add
       .text(cx, 96, 'EINSTEIN', { fontFamily: FONT, fontStyle: 'bold', fontSize: '76px', color: palette.text })
@@ -63,6 +67,32 @@ export class MenuScene extends Phaser.Scene {
         { fontFamily: FONT, fontSize: '17px', color: palette.accent, align: 'center', lineSpacing: 7 },
       )
       .setOrigin(0.5);
+  }
+
+  /** Two toggles in the top-right corner: SFX and music on/off (persisted). */
+  private buildAudioToggles(): void {
+    const w = 132;
+    const x = GAME.width - w / 2 - 24;
+    let sfx: BtnHandle;
+    let music: BtnHandle;
+    sfx = makeButton(this, x, 40, w, 40, this.sfxLabel(), () => {
+      audio.setSfxEnabled(!audio.sfxEnabled);
+      sfx.setSelected(audio.sfxEnabled);
+      sfx.setText(this.sfxLabel());
+    }, { fontSize: 15, selected: audio.sfxEnabled });
+    music = makeButton(this, x, 88, w, 40, this.musicLabel(), () => {
+      audio.setMusicEnabled(!audio.musicEnabled);
+      music.setSelected(audio.musicEnabled);
+      music.setText(this.musicLabel());
+    }, { fontSize: 15, selected: audio.musicEnabled });
+  }
+
+  private sfxLabel(): string {
+    return audio.sfxEnabled ? '♪  SFX ON' : '·  SFX OFF';
+  }
+
+  private musicLabel(): string {
+    return audio.musicEnabled ? '♫  MUSIC ON' : '·  MUSIC OFF';
   }
 
   private selectSize(s: number): void {

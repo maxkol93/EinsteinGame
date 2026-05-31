@@ -26,6 +26,14 @@ const info = await page.evaluate(() => {
 });
 console.log(`game started: ${info.size}x${info.size}, ${info.given}/${info.total} pre-solved, ${info.clues} clues`);
 
+// the SFX/music bank must have loaded into the audio cache
+const audioOk = await page.evaluate(() => {
+  const keys = ['spread', 'click', 'pick', 'pick_2', 'pick_3', 'pick_4', 'solve', 'wrong', 'win', 'lose', 'start', 'ambient_loop'];
+  return keys.every((k) => window.game.cache.audio.exists(k));
+});
+if (!audioOk) errors.push('audio bank did not load (missing key in cache.audio)');
+else console.log('audio bank loaded (12 sounds)');
+
 // hover a clue to show the tooltip, then screenshot
 const cg = await page.evaluate(() => {
   const s = window.game.scene.getScene('game');

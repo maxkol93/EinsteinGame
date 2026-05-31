@@ -7,6 +7,7 @@ import { Rule } from '../model/types';
 import { makeButton } from '../ui/button';
 import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
+import { audio } from '../audio/sound';
 
 // Layout mirrors the pygame landscape build (view/window.py).
 const SPAN = 615;
@@ -156,6 +157,9 @@ export class GameScene extends Phaser.Scene {
     this.buildClues();
     this.bindInput();
     this.startTimer();
+
+    audio.startMusic();
+    audio.play('start');
 
     if (this.board.isWon) this.time.delayedCall(250, () => this.finish(true));
   }
@@ -426,6 +430,7 @@ export class GameScene extends Phaser.Scene {
         this.glow(g, true, true);
         this.litSpread.push(g);
       }
+      if (this.litSpread.length > 0) audio.play('spread');
     });
   }
 
@@ -558,8 +563,23 @@ export class GameScene extends Phaser.Scene {
       this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n)));
     }
 
+    // Audio mirrors view/window.py: each *resolving* cell ticks a 'pick' at its
+    // combo pitch (cascade depth → rising arpeggio); the many row-strike shimmer
+    // pops above stay silent (a pick per struck candidate was noisy). One 'solve'
+    // chime per resolving action sits under the run.
     for (const r of cs.resolved) {
-      this.time.delayedCall(r.step * STEP_MS, () => this.renderBig(r.y, r.x, r.n, true));
+      const delay = r.step * STEP_MS;
+      const key = audio.pickForStep(Math.floor(r.step));
+      this.time.delayedCall(delay, () => {
+        this.renderBig(r.y, r.x, r.n, true);
+        audio.play(key);
+      });
+    }
+    if (cs.resolved.length > 0) {
+      audio.play('solve');
+    } else if (cs.struck.length > 0) {
+      // a plain pop that resolved nothing still answers the tap
+      audio.play('pick');
     }
 
     if (cs.resolved.length >= 3) {
@@ -581,6 +601,7 @@ export class GameScene extends Phaser.Scene {
 
   private registerWrong(y: number, x: number, n: number): void {
     this.mistakes += 1;
+    audio.play('wrong');
     // Flood the WHOLE cell red + downward spray + ring + edge-vignette pulse
     // (pygame wrong_click takes the full cell rect, not the small candidate).
     const { cx, cy } = this.cellCenter(y, x);
@@ -768,8 +789,8 @@ export class GameScene extends Phaser.Scene {
     this.timerEvent?.remove();
     this.hideTooltip();
 
-    if (won) this.fx.celebrate();
-    else this.fx.defeat();
+    if (won) { this.fx.celebrate(); audio.play('win'); }
+    else { this.fx.defeat(); audio.play('lose'); }
 
     this.time.delayedCall(won ? 260 : 220, () => this.showEndPanel(won));
   }

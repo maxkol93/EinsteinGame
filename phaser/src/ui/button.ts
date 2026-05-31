@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS, FONT, palette, brighten } from '../config';
 import { roundedTex, strokedRoundedTex } from './textures';
+import { audio } from '../audio/sound';
 
 export interface ButtonOpts {
   fontSize?: number;
@@ -13,6 +14,7 @@ export interface ButtonOpts {
 export interface BtnHandle {
   root: Phaser.GameObjects.Container;
   setSelected(on: boolean): void;
+  setText(text: string): void;
 }
 
 /**
@@ -58,6 +60,7 @@ export function makeButton(
   });
   bg.on('pointerdown', () => {
     scene.tweens.add({ targets: root, scaleX: 0.96, scaleY: 0.96, duration: 70, yoyo: true });
+    audio.play('click');
     onClick();
   });
 
@@ -67,6 +70,9 @@ export function makeButton(
       selected = on;
       bg.setTint(on ? brighten(fill, 18) : fill);
       refreshOutline();
+    },
+    setText(t: string) {
+      label.setText(t);
     },
   };
 }

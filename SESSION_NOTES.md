@@ -1,6 +1,40 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-05-25**.
+Quick context for resuming work. Latest session: **2026-05-31**.
+
+## 2026-05-31 — Phaser: sound pass (WebAudio)
+
+Ported the audio layer — the Phaser build had **no sound** until now, and web
+audio (pygame-mixer stutter on pygbag) was one of the three reasons we left
+pygame. Built on Phaser's native **WebAudio** backend, so the unlock/mixing
+hacks from `view/sounds.py` + `build_web.sh` are gone.
+
+- **Assets:** copied the SFX/music bank `view/sounds/*.ogg` →
+  `phaser/public/sounds/` (12 files; `hover.ogg` deliberately dropped — a
+  per-hover tick is the densest, least-valuable voice, same call we cut on the
+  pygame web build). ~370 KB, loaded once in `BootScene.preload`.
+- **`src/audio/sound.ts`** — a module singleton `audio` bound to the game's
+  global sound manager. Faithful port of `sounds.py`: per-key gain trim
+  (`_SOUND_GAIN`), per-key repeat throttle in ms (`_SOUND_THROTTLE`, via
+  `performance.now()`), the `pick → pick_2/3/4` combo-pitch ladder by cascade
+  depth, and a looping ambient bed with its own volume. Degrades to no-ops if
+  WebAudio/the cache is unavailable — never throws. Settings (SFX/music on/off,
+  volumes) persist to `localStorage`.
+- **Wiring** mirrors `window.py`/`game.py` call sites: `start` on board build,
+  `wrong` on a mistake, `win`/`lose` on finish, `click` on every button
+  (`ui/button.ts`), `spread` when hover twins light up. Cascade audio: each
+  **resolving** cell ticks a `pick` at its combo pitch + one `solve` per action;
+  the row-strike shimmer pops stay **silent** (matching the pygame anti-noise
+  decision); a plain pop that resolves nothing still answers with one `pick`.
+- **Menu:** two persisted toggles top-right (`♪ SFX` / `♫ MUSIC`); music starts
+  on the menu and game scenes (idempotent, WebAudio auto-unlocks on first click).
+- **Verified:** `npm run build` green (~352 KB gz), `npm run smoke` 270/270,
+  `npm run verify` plays menu→game→cascade→win with **zero console/page errors**
+  and asserts all 12 sounds loaded into the audio cache.
+
+**Next (still not ported):** exact Daily/Weekly/Monthly (needs CPython-MT RNG
+validated against `shared/daily_vectors.json`), stats/achievements/progression
+unlocks, Zen mode, tutorial.
 
 ## 2026-05-25 — pygame paused, Phaser port started
 
