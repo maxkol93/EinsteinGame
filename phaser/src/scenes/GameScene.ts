@@ -174,7 +174,7 @@ export class GameScene extends Phaser.Scene {
     this.candRows = Math.ceil(this.size / this.candCols);
     this.board = new PuzzleBoard(this.size, this.model.solution, this.model.definedStartCells);
 
-    this.liftShadow = this.add.image(0, 0, SHADOW).setAlpha(0).setDepth(19);
+    this.liftShadow = this.add.image(0, 0, SHADOW).setTint(0x000000).setAlpha(0).setDepth(19);
 
     this.buildBackground();
     this.buildPanel();
@@ -465,8 +465,10 @@ export class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: [img, outline, txt], y: cy - 7, duration: 120, ease: 'Quad.easeOut' });
       if (this.liftShadow) {
         this.tweens.killTweensOf(this.liftShadow);
-        this.liftShadow.setPosition(cx, cy + 7).setDisplaySize(sub * 1.32, sub * 1.32).setDepth(19);
-        this.tweens.add({ targets: this.liftShadow, alpha: 0.5, duration: 120 });
+        // tile-shaped shadow, barely bigger than the chip, low-and-aside so the
+        // small lift reads as "raised a little"
+        this.liftShadow.setPosition(cx + 3, cy + 7).setDisplaySize(sub * 1.08, sub * 1.08).setDepth(19);
+        this.tweens.add({ targets: this.liftShadow, alpha: 0.62, duration: 120 });
       }
     } else {
       img.setTint(rowColor(chip.value));
@@ -725,8 +727,14 @@ export class GameScene extends Phaser.Scene {
     this.fx.wrong(cx, cy, this.cellSide);
     const chip = this.chips[y][x].get(n);
     if (chip) {
-      // an absolute-x jitter (not '+=5') so repeated wrong taps never drift
       this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
+      // Normalise out of any hover-lift first — doAction's hoverEnd() started a
+      // return tween that we just killed, so without this the chip would hang
+      // raised + outlined in the air after a wrong tap.
+      chip.img.setDepth(5).setScale(chip.base).setTint(rowColor(chip.value)).setPosition(chip.cx, chip.cy);
+      chip.outline.setDepth(6).setScale(chip.base).setAlpha(0).setPosition(chip.cx, chip.cy);
+      chip.txt.setDepth(7).setScale(1).setPosition(chip.cx, chip.cy);
+      // an absolute-x jitter (not '+=5') so repeated wrong taps never drift
       this.tweens.add({
         targets: [chip.img, chip.txt, chip.outline], x: chip.cx + 5,
         duration: 45, yoyo: true, repeat: 3,
@@ -1045,7 +1053,7 @@ export class GameScene extends Phaser.Scene {
 
     const objs: Phaser.GameObjects.GameObject[] = [];
     // semi-transparent so the board stays readable behind the tooltip
-    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.6);
+    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.7);
     objs.push(bg);
     lines.forEach((ln, li) => {
       let x = pad;

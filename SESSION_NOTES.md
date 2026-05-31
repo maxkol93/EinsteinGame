@@ -2,6 +2,28 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: polish pass #3 (juice/feel)
+
+1. **Chip hung in the air after a WRONG tap** — doAction's `hoverEnd()` starts a
+   lift-return tween that `registerWrong` then killed mid-flight. `registerWrong`
+   now normalises the chip to rest (depth/scale/tint/pos, outline α0) before the
+   jitter. (Verified: depth 5, outline α 0, dy 0, scale 1 after a wrong tap.)
+2. **Screen shake too strong** — `bigBurst` 4→1.6 (130 ms), wrong 9→2.4 (170 ms).
+   Calm taps, not jolts.
+3. **Multi-tone square particles** — replaced with one soft round
+   `softDotTex` (radial-gradient), MONOCHROME (single `tint`, no white sparks /
+   no per-particle colour), softer gravity (240) + longer lifespans + size/alpha
+   ease-out so the spray drifts, settles and lingers. Cleaner, more tactile.
+4. **Tooltip alpha** 0.6 → 0.7.
+5. **Lift shadow was a fuzzy oval** — `shadowTex` is now a tight (blur 2.5),
+   pure-black, rounded-rect that nearly fills its texture, so displaySize maps
+   1:1 and the shape matches the element. Drawn just bigger than the face and
+   offset down+aside (buttons (3,8) ×1.0; chips (cx+3,cy+7) ×1.08) → reads as
+   "raised a little" with a defined dark edge below.
+
+Verified: `typecheck` clean, `verify` green, screenshots confirm the
+button-shaped shadow + monochrome round particles.
+
 ## 2026-05-31 — Phaser: polish pass #2 (11 more fixes)
 
 Second player-reported list. Files: `config.ts`, `main.ts`, `fx/fx.ts`,

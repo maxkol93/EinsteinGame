@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { brighten, FONT, GAME } from '../config';
-import { dotTex, chunkTex, roundedTex } from '../ui/textures';
+import { chunkTex, softDotTex, roundedTex } from '../ui/textures';
 
 interface BurstOpts {
   count?: number;
@@ -25,16 +25,16 @@ interface BurstOpts {
  */
 export class Fx {
   private scene: Phaser.Scene;
-  private dot: string;
   private chunk: string;
+  private soft: string;
   private vignette: Phaser.GameObjects.Image;
   private vigHold = 0;
   private vigTween?: Phaser.Tweens.Tween | Phaser.Tweens.TweenChain;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
-    this.dot = dotTex(scene);
     this.chunk = chunkTex(scene);
+    this.soft = softDotTex(scene);
     this.vignette = scene.add
       .image(GAME.width / 2, GAME.height / 2, this.vignetteTex())
       .setDisplaySize(GAME.width * 1.1, GAME.height * 1.16)
@@ -61,52 +61,34 @@ export class Fx {
     return key;
   }
 
-  /** Outward spray — colour chunks (gravity, spin) + bright additive sparks. */
+  /** Outward spray — soft round MONOCHROME dots. One feathered circle texture,
+   *  one tint, a gentle gravity and a long ease-out fade: a clean, tactile puff
+   *  that lingers, instead of a multi-tone confetti of squares and white sparks.
+   *  Particle best-practice: ease size→0 and alpha→0 over a long lifespan, low
+   *  gravity so they drift and settle, no rotation noise. */
   burst(x: number, y: number, color: number, opts: BurstOpts = {}): void {
     const count = opts.count ?? 14;
-    const speed = opts.speed ?? 320;
+    const speed = opts.speed ?? 300;
     const size = opts.size ?? 5;
-    const life = opts.life ?? [450, 850];
-    const grav = opts.gravity ?? 520;
+    const life = opts.life ?? [600, 1100];
+    const grav = opts.gravity ?? 240; // softer than before so they float & settle
     const aMin = opts.angleMin ?? 0;
     const aMax = opts.angleMax ?? 360;
-    const sparks = Math.round(count * (opts.sparkRatio ?? 0.45));
-    const chunks = Math.max(0, count - sparks);
 
-    if (chunks > 0) {
-      const ce = this.scene.add
-        .particles(x, y, this.chunk, {
-          lifespan: { min: life[0], max: life[1] },
-          speed: { min: speed * 0.35, max: speed },
-          angle: { min: aMin, max: aMax },
-          gravityY: grav,
-          scale: { start: (size * 2.2) / 18, end: 0 }, // chunk tex is 18px
-          alpha: { start: 1, end: 0 },
-          rotate: { min: 0, max: 360 },
-          tint: [color, brighten(color, 35)],
-          emitting: false,
-        })
-        .setDepth(60);
-      ce.explode(chunks);
-      this.scene.time.delayedCall(life[1] + 220, () => ce.destroy());
-    }
-    if (sparks > 0) {
-      const se = this.scene.add
-        .particles(x, y, this.dot, {
-          lifespan: { min: life[0] * 0.55, max: life[1] * 0.8 },
-          speed: { min: speed * 0.4, max: speed * 1.15 },
-          angle: { min: aMin, max: aMax },
-          gravityY: grav * 0.45, // sparks hang/rise a touch — the fountain look
-          scale: { start: (size * 2.2) / 32, end: 0 }, // dot tex is 32px
-          alpha: { start: 1, end: 0 },
-          tint: [brighten(color, 80), 0xffffff],
-          blendMode: Phaser.BlendModes.ADD,
-          emitting: false,
-        })
-        .setDepth(61);
-      se.explode(sparks);
-      this.scene.time.delayedCall(life[1] + 220, () => se.destroy());
-    }
+    const e = this.scene.add
+      .particles(x, y, this.soft, {
+        lifespan: { min: life[0], max: life[1] },
+        speed: { min: speed * 0.22, max: speed },
+        angle: { min: aMin, max: aMax },
+        gravityY: grav,
+        scale: { start: (size * 2.4) / 48, end: 0, ease: 'Quad.easeOut' }, // soft tex is 48px
+        alpha: { start: 0.95, end: 0, ease: 'Quad.easeIn' },
+        tint: color, // single tone — no per-particle colour variation
+        emitting: false,
+      })
+      .setDepth(60);
+    e.explode(count);
+    this.scene.time.delayedCall(life[1] + 300, () => e.destroy());
   }
 
   /** Expanding stroked shockwave ring — ADDITIVE (like pygame's BLEND_RGBA_ADD
@@ -149,20 +131,20 @@ export class Fx {
   /** Candidate tile pop — small + snappy spark spray + ring. Held a touch
    *  longer so the pop is actually readable. */
   smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 13, speed: 270, size: 6, life: [380, 660], sparkRatio: 0.55 });
-    this.ring(x, y, color, 44, 520, 5);
-    this.ring(x, y, 0xffffff, 28, 360, 3);
+    this.burst(x, y, color, { count: 12, speed: 250, size: 6, life: [520, 980] });
+    this.ring(x, y, color, 44, 560, 5);
+    this.ring(x, y, 0xffffff, 28, 380, 3);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
    *  shake. Rings/flash linger longer (so the "solve" reads), shake softened. */
   bigBurst(x: number, y: number, w: number, h: number, color: number): void {
-    this.burst(x, y, color, { count: 28, speed: 470, size: 9, life: [700, 1300] });
+    this.burst(x, y, color, { count: 26, speed: 430, size: 9, life: [820, 1500] });
     this.ring(x, y, color, 112, 760, 8);
     this.ring(x, y, 0xffffff, 74, 540, 5);
     this.ring(x, y, color, 184, 980, 4, 26); // wide slow cascade "wave"
     this.flash(x, y, w, h, 0xffffff, true, 420);
-    this.shake(4, 200); // softer than before — the screen-jolt was too strong
+    this.shake(1.6, 130); // a gentle tap, not a jolt
   }
 
   /** Wrong move: red flash over the WHOLE cell, downward red spray, ring,
@@ -174,8 +156,8 @@ export class Fx {
       angleMin: 22, angleMax: 158, gravity: 560, sparkRatio: 0.4,
     });
     this.ring(cx, cy, 0xe85454, 78, 360, 5);
-    this.vignettePulse(0xdc3737, 0.62);
-    this.shake(9, 320);
+    this.vignettePulse(0xdc3737, 0.55);
+    this.shake(2.4, 170); // much calmer than before — a wrong tap shouldn't jolt
   }
 
   heartBreak(x: number, y: number): void {

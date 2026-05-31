@@ -33,10 +33,13 @@ export function makeButton(
   // A soft drop shadow sitting under the button. On hover the face lifts and the
   // shadow deepens — the pygame buttons rise off the panel (buttons.soft_shadow)
   // rather than just brightening in place.
+  // button-shaped shadow, just a touch bigger than the face, sitting low-and-
+  // aside so the lift reads as "raised a little" (a defined dark edge below).
   const shadow = scene.add
-    .image(0, 8, shadowTex(scene))
-    .setDisplaySize(w + 26, h + 26)
-    .setAlpha(0);
+    .image(3, 8, shadowTex(scene, 128, 128, Math.round(radius * 1.4)))
+    .setDisplaySize(w + 8, h + 8)
+    .setAlpha(0)
+    .setTint(0x000000);
   const bg = scene.add.image(0, 0, roundedTex(scene, w, h, radius)).setTint(fill);
   bg.setInteractive({ useHandCursor: true });
   const outline = scene.add
@@ -59,7 +62,7 @@ export function makeButton(
   bg.on('pointerover', () => {
     scene.tweens.killTweensOf(face);
     scene.tweens.add({ targets: face, y: -4, duration: 110, ease: 'Quad.easeOut' });
-    scene.tweens.add({ targets: shadow, alpha: 0.6, duration: 110 });
+    scene.tweens.add({ targets: shadow, alpha: 0.72, duration: 110 });
     // lift + shadow + a light brighten only — NO hover outline (the outline is
     // reserved for the selected state).
     bg.setTint(brighten(fill, 42));

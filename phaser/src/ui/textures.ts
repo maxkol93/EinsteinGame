@@ -41,6 +41,28 @@ export function dotTex(scene: Phaser.Scene): string {
   return key;
 }
 
+// Soft round particle — a radial-gradient dot (solid core → feathered edge).
+// One tinted texture used for every burst so pops read as a clean monochrome
+// spray rather than a multi-tone confetti of squares.
+export function softDotTex(scene: Phaser.Scene): string {
+  const key = 'fx_softdot';
+  if (scene.textures.exists(key)) return key;
+  const s = 48;
+  const c = document.createElement('canvas');
+  c.width = s; c.height = s;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.92)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2);
+  ctx.fill();
+  scene.textures.addCanvas(key, c);
+  return key;
+}
+
 // Chunk particle — a fat rounded square that tumbles as it flies.
 export function chunkTex(scene: Phaser.Scene): string {
   const key = 'fx_chunk';
@@ -124,18 +146,20 @@ export function shadowStripTex(
   return key;
 }
 
-// A crisp-ish drop shadow for a lifted tile/button. Less blur than before (the
-// lift shadow was too diffuse/cloudy) — tighter and darker so the lift reads as
-// a defined shadow, not a fog.
-export function shadowTex(scene: Phaser.Scene, w = 112, h = 112, radius = 18): string {
+// A crisp, dark, button-SHAPED drop shadow for a lifted tile/button. The
+// rounded rect nearly fills the texture (small margin for a tight blur), so the
+// caller's displaySize maps 1:1 to the shadow size — and the rounded-rect shape
+// matches the element instead of reading as a fuzzy oval. Positioned slightly
+// down+aside by the caller so a small offset says "lifted just a little".
+export function shadowTex(scene: Phaser.Scene, w = 128, h = 128, radius = 22): string {
   const key = `fx_shadow_${w}x${h}_${radius}`;
   if (scene.textures.exists(key)) return key;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d')!;
-  ctx.filter = 'blur(4px)';
-  ctx.fillStyle = 'rgba(0,0,0,0.92)';
-  roundRectPath(ctx, 20, 20, w - 40, h - 40, radius);
+  ctx.filter = 'blur(2.5px)'; // tight, defined edge — not a cloud
+  ctx.fillStyle = 'rgba(0,0,0,1)';
+  roundRectPath(ctx, 6, 6, w - 12, h - 12, radius);
   ctx.fill();
   scene.textures.addCanvas(key, c);
   return key;
