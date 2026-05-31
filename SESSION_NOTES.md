@@ -2,6 +2,39 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: polish pass #2 (11 more fixes)
+
+Second player-reported list. Files: `config.ts`, `main.ts`, `fx/fx.ts`,
+`ui/button.ts`, `ui/textures.ts`, `scenes/{Game,Menu}Scene.ts`.
+
+1. **Clues unsorted** — `buildClues` now ranks by type: `^` → `<->` → `...` →
+   triple (was just "operator-first").
+2. **Outline hung in the air** — a lifted candidate popped by a cascade left its
+   lift/outline/drop-shadow up (no `pointerout`). `destroyChip`/`renderBig` now
+   `hoverEnd()` if the lifted chip is the one being torn down, and `hoverEnd`
+   force-hides the shared `liftShadow`.
+3. **Shake too strong on solve** — `bigBurst` shake 7→4 (dur 240→200).
+4. **Pops too brief** — `smallBurst`/`bigBurst` ring+particle lifetimes and the
+   big-cell grow tween lengthened so the solve/pop reads.
+5. **Whole game blurry fullscreen** — supersample: render buffer is
+   `RENDER_SCALE`(=2)× the logical size and each scene's camera zooms back +
+   re-centres (`applyRenderScale`), so text AND textures draw at 2× density.
+   (Hit-testing verified intact.)
+6. **No hold progress** — `startHoldProgress` draws a radial fill ring during a
+   long-press; completes → define fires. (Verified visually.)
+7. **Lift shadow too fuzzy** — `shadowTex` blur 8→4 px, darker; crisper lift.
+8. **Hover outline on menu buttons** — removed; hover is now lift+shadow+brighten
+   only (outline reserved for the selected state).
+9. **Combo from 3** → from **2** resolved cells.
+10. **Outline stuck after auto-dim** — the mini outline was inside `objs` so the
+    0.32 dim left it visible; pulled it out and `dimGroup` now clears it.
+11. **Tooltip too opaque** — alpha 0.82→0.6.
+
+Verified: `typecheck` clean, `verify` green (clicks fine under supersample),
+screenshots confirm clue sort, the hold ring, crisp text/art, lift+shadow.
+NB: headless rAF throttles when fully idle (entrance `busy` only clears once
+frames render) — not a bug; real browsers render at 60fps.
+
 ## 2026-05-31 — Phaser: polish pass (10 visual/behaviour fixes vs pygame)
 
 Fixed a player-reported list of port divergences (visuals + feel). Files:

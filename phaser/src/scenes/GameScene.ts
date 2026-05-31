@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, FONT, palette, rowColor, brighten } from '../config';
+import { COLORS, GAME, FONT, palette, rowColor, brighten, applyRenderScale } from '../config';
 import { generatePuzzle, FieldAndRules, COMPLEXITY } from '../model/fieldAndRules';
 import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
@@ -22,6 +22,7 @@ const CLUE_X = BX + SPAN + MARGIN; // right panel x = 1015
 const RULE_CELL = 38;
 const RULES_TOP = 54;
 const STEP_MS = 130;
+const HOLD_MS = 350; // long-press duration to "define" a cell
 const MAX_LIVES = 3;
 const DIFF = ['EASY', 'NORMAL', 'HARD'];
 const OP_SYMBOL: Record<string, string> = { '^': '↕', '<->': '↔', '...': '…' };
@@ -114,6 +115,8 @@ export class GameScene extends Phaser.Scene {
   private press: PressInfo | null = null;
   private longPress?: Phaser.Time.TimerEvent;
   private hintActive: { restore: () => void } | null = null;
+  private holdRing?: Phaser.GameObjects.Graphics;
+  private holdTween?: Phaser.Tweens.Tween;
 
   constructor() {
     super('game');
@@ -145,6 +148,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    applyRenderScale(this);
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBackgroundColor(COLORS.bg);
     this.fx = new Fx(this);
@@ -506,12 +510,20 @@ export class GameScene extends Phaser.Scene {
     for (const g of this.litSpread) this.glow(g, false, false);
     this.litSpread = [];
     this.hoverSource = null;
+    // belt-and-braces: make sure the shared lift drop-shadow is never left up
+    if (this.liftShadow && this.liftShadow.alpha > 0) {
+      this.tweens.killTweensOf(this.liftShadow);
+      this.tweens.add({ targets: this.liftShadow, alpha: 0, duration: 120 });
+    }
   }
 
   /** Tear a candidate chip down reliably: kill any in-flight (hover) tweens and
    *  detach input first, then a squash-and-pop, with a guaranteed destroy even
    *  if the tween is interrupted — so a popped chip never lingers on screen. */
   private destroyChip(chip: Chip, delay: number): void {
+    // if the chip being torn down is the one currently lifted under the cursor,
+    // end the hover first so its lift/outline/drop-shadow don't hang in the air
+    if (this.directLiftChip === chip) this.hoverEnd();
     this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
     chip.img.disableInteractive();
     chip.outline.setAlpha(0);
@@ -531,6 +543,10 @@ export class GameScene extends Phaser.Scene {
 
   private renderBig(y: number, x: number, n: number, animate: boolean): void {
     const map = this.chips[y][x];
+    // a cell resolving under the cursor must not leave a hover lift hanging
+    if (this.directLiftChip && map.has(this.directLiftChip.value) && this.chips[y][x].get(this.directLiftChip.value) === this.directLiftChip) {
+      this.hoverEnd();
+    }
     for (const c of map.values()) {
       this.tweens.killTweensOf([c.img, c.txt, c.outline]);
       c.img.destroy(); c.txt.destroy(); c.outline.destroy();
@@ -562,8 +578,8 @@ export class GameScene extends Phaser.Scene {
     img.on('pointerout', () => { if (this.hoverSource === big) this.hoverEnd(); });
 
     if (animate) {
-      this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 340, ease: 'Back.easeOut' });
-      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 340, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 440, ease: 'Back.easeOut' });
       this.fx.bigBurst(cx, cy, this.cellSide, this.cellSide, color);
     }
   }
@@ -572,6 +588,7 @@ export class GameScene extends Phaser.Scene {
 
   private bindInput(): void {
     this.input.on('pointerup', () => {
+      this.clearHoldProgress();
       if (this.press && !this.press.fired) {
         const { y, x, n } = this.press;
         this.press.fired = true;
@@ -590,12 +607,44 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.press = { y, x, n, fired: false };
-    this.longPress = this.time.delayedCall(350, () => {
+    const chip = this.chips[y][x].get(n);
+    if (chip) this.startHoldProgress(chip);
+    this.longPress = this.time.delayedCall(HOLD_MS, () => {
+      this.clearHoldProgress();
       if (this.press && !this.press.fired) {
         this.press.fired = true;
         this.doAction(y, x, n, true);
       }
     });
+  }
+
+  /** A radial fill ring shown while a candidate is held — once it completes the
+   *  long-press "define" fires (pygame's hold-to-define progress ring). */
+  private startHoldProgress(chip: Chip): void {
+    this.clearHoldProgress();
+    const g = this.add.graphics().setDepth(25);
+    const r = Math.max(12, chip.sub * 0.6);
+    this.holdRing = g;
+    this.holdTween = this.tweens.addCounter({
+      from: 0, to: 1, duration: HOLD_MS, ease: 'Linear',
+      onUpdate: (tw) => {
+        const t = tw.getValue() ?? 0;
+        g.clear();
+        g.lineStyle(4, 0x000000, 0.35);
+        g.strokeCircle(chip.cx, chip.cy, r);
+        g.lineStyle(4, 0xffe27a, 0.95);
+        g.beginPath();
+        g.arc(chip.cx, chip.cy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false);
+        g.strokePath();
+      },
+    });
+  }
+
+  private clearHoldProgress(): void {
+    this.holdTween?.stop();
+    this.holdTween = undefined;
+    this.holdRing?.destroy();
+    this.holdRing = undefined;
   }
 
   private doAction(y: number, x: number, n: number, isDefine: boolean): void {
@@ -646,7 +695,7 @@ export class GameScene extends Phaser.Scene {
       audio.play('pick');
     }
 
-    if (cs.resolved.length >= 3) {
+    if (cs.resolved.length >= 2) {
       const f = cs.resolved[0];
       const { cx, cy } = this.cellCenter(f.y, f.x);
       this.time.delayedCall(120, () => this.fx.comboText(cx, cy - 8, `+${cs.resolved.length} chain!`));
@@ -847,11 +896,16 @@ export class GameScene extends Phaser.Scene {
       .text(CLUE_X + PANEL / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
       .setOrigin(0.5);
 
-    const rules = [...this.model.displayableRules].sort((a, b) => {
-      const ka = typeof a[1] === 'string' ? 1 : 0;
-      const kb = typeof b[1] === 'string' ? 1 : 0;
-      return kb - ka; // operator clues first, like the pygame layout
-    });
+    // Group clues by type so the panel reads in a consistent order:
+    // same-column (^), neighbours (<->), left-of (...), then three-in-a-row.
+    const rank = (r: Rule): number => {
+      const op = r[1];
+      if (op === '^') return 0;
+      if (op === '<->') return 1;
+      if (op === '...') return 2;
+      return 3; // triple (all-number)
+    };
+    const rules = [...this.model.displayableRules].sort((a, b) => rank(a) - rank(b));
 
     const ruleW = RULE_CELL * 3;
     const colGap = 16;
@@ -883,7 +937,9 @@ export class GameScene extends Phaser.Scene {
         const t = this.add
           .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '19px', color: '#ffffff' })
           .setOrigin(0.5);
-        objs.push(img, outline, t);
+        // outline is NOT in objs — the dim pass must not leave it visible at
+        // 0.32; it's controlled only via glow/dimGroup.
+        objs.push(img, t);
         minis.push({ img, txt: t, outline, value: v, scale: miniScale });
       } else {
         const t = this.add
@@ -910,9 +966,8 @@ export class GameScene extends Phaser.Scene {
       if (this.hoverSource === group) this.hoverEnd();
     });
     hit.on('pointerdown', () => {
-      group.dim = !group.dim;
-      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
-      if (group.dim && this.hoverSource === group) this.hoverEnd();
+      if (group.dim) this.undimGroup(group);
+      else this.dimGroup(group);
     });
   }
 
@@ -934,11 +989,27 @@ export class GameScene extends Phaser.Scene {
     for (const group of this.clueGroups) {
       if (group.dim) continue;
       const satisfied = group.rule.every((v) => typeof v !== 'number' || this.valueSolved(v));
-      if (!satisfied) continue;
-      group.dim = true;
-      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(0.32));
-      if (this.hoverSource === group) this.hoverEnd();
+      if (satisfied) this.dimGroup(group);
     }
+  }
+
+  /** Press (dim) a clue: fade its tiles AND clear any glow outline/scale left
+   *  on its minis (the dim must not leave a hanging highlight). */
+  private dimGroup(group: ClueGroup): void {
+    group.dim = true;
+    group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(0.32));
+    for (const m of group.minis) {
+      this.tweens.killTweensOf([m.img, m.outline, m.txt]);
+      m.outline.setAlpha(0);
+      m.img.setScale(m.scale).setTint(rowColor(m.value));
+      m.txt.setScale(1);
+    }
+    if (this.hoverSource === group) this.hoverEnd();
+  }
+
+  private undimGroup(group: ClueGroup): void {
+    group.dim = false;
+    group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(1));
   }
 
   private showTooltip(group: ClueGroup): void {
@@ -974,7 +1045,7 @@ export class GameScene extends Phaser.Scene {
 
     const objs: Phaser.GameObjects.GameObject[] = [];
     // semi-transparent so the board stays readable behind the tooltip
-    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.82);
+    const bg = this.add.image(0, 0, roundedTex(this, Math.ceil(pw), Math.ceil(ph), 12)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 24)).setAlpha(0.6);
     objs.push(bg);
     lines.forEach((ln, li) => {
       let x = pad;

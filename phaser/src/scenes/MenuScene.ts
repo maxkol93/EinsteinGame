@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { COLORS, GAME, FONT, palette } from '../config';
+import { COLORS, GAME, FONT, palette, applyRenderScale } from '../config';
 import { makeButton, BtnHandle } from '../ui/button';
 import { audio } from '../audio/sound';
 import { stats } from '../model/stats';
@@ -33,6 +33,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   create(): void {
+    applyRenderScale(this);
     this.cameras.main.setBackgroundColor(COLORS.bg);
     const cx = GAME.width / 2;
 

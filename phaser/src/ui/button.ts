@@ -59,9 +59,10 @@ export function makeButton(
   bg.on('pointerover', () => {
     scene.tweens.killTweensOf(face);
     scene.tweens.add({ targets: face, y: -4, duration: 110, ease: 'Quad.easeOut' });
-    scene.tweens.add({ targets: shadow, alpha: 0.5, duration: 110 });
+    scene.tweens.add({ targets: shadow, alpha: 0.6, duration: 110 });
+    // lift + shadow + a light brighten only — NO hover outline (the outline is
+    // reserved for the selected state).
     bg.setTint(brighten(fill, 42));
-    if (!selected) outline.setAlpha(0.5);
   });
   bg.on('pointerout', () => {
     scene.tweens.killTweensOf(face);

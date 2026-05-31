@@ -124,16 +124,18 @@ export function shadowStripTex(
   return key;
 }
 
-// A soft blurred drop shadow for a lifted tile (pygame buttons.soft_shadow).
+// A crisp-ish drop shadow for a lifted tile/button. Less blur than before (the
+// lift shadow was too diffuse/cloudy) — tighter and darker so the lift reads as
+// a defined shadow, not a fog.
 export function shadowTex(scene: Phaser.Scene, w = 112, h = 112, radius = 18): string {
   const key = `fx_shadow_${w}x${h}_${radius}`;
   if (scene.textures.exists(key)) return key;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d')!;
-  ctx.filter = 'blur(8px)';
-  ctx.fillStyle = 'rgba(0,0,0,0.85)';
-  roundRectPath(ctx, 16, 16, w - 32, h - 32, radius);
+  ctx.filter = 'blur(4px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  roundRectPath(ctx, 20, 20, w - 40, h - 40, radius);
   ctx.fill();
   scene.textures.addCanvas(key, c);
   return key;

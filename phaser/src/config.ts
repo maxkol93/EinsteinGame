@@ -1,5 +1,6 @@
 // The Mocha palette is single-sourced in ../../shared/palette.json (a mirror of
 // the pygame view/palettes.py). Don't redefine colors here — edit the JSON.
+import Phaser from 'phaser';
 import paletteJson from '../../shared/palette.json';
 
 export const palette = paletteJson;
@@ -37,3 +38,17 @@ export const GAME = {
   width: 1295,
   height: 735,
 };
+
+// Supersample factor: the game logic/layout stays in GAME.width×GAME.height
+// coords, but the actual render buffer is RENDER_SCALE× bigger and each scene's
+// camera zooms by the same factor (and re-centres). Net effect — every pixel
+// (text AND textures) is rendered at 2× density, so it stays sharp when
+// Scale.FIT stretches the canvas to fill a large/HiDPI screen.
+export const RENDER_SCALE = 2;
+
+/** Apply the supersample zoom+centre to a scene's main camera. Call first in
+ *  each rendering scene's create(). */
+export function applyRenderScale(scene: Phaser.Scene): void {
+  scene.cameras.main.setZoom(RENDER_SCALE);
+  scene.cameras.main.centerOn(GAME.width / 2, GAME.height / 2);
+}

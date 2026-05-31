@@ -146,20 +146,23 @@ export class Fx {
     this.scene.tweens.add({ targets: img, alpha: 0, duration: life, ease: 'Quad.easeIn', onComplete: () => img.destroy() });
   }
 
-  /** Candidate tile pop — small + snappy spark spray + ring. */
+  /** Candidate tile pop — small + snappy spark spray + ring. Held a touch
+   *  longer so the pop is actually readable. */
   smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 11, speed: 250, size: 5.5, life: [240, 480], sparkRatio: 0.55 });
-    this.ring(x, y, color, 34, 320, 4);
+    this.burst(x, y, color, { count: 13, speed: 270, size: 6, life: [380, 660], sparkRatio: 0.55 });
+    this.ring(x, y, color, 44, 520, 5);
+    this.ring(x, y, 0xffffff, 28, 360, 3);
   }
 
-  /** Resolved big cell — the headline pop: spray, rings, white wave, bloom, shake. */
+  /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
+   *  shake. Rings/flash linger longer (so the "solve" reads), shake softened. */
   bigBurst(x: number, y: number, w: number, h: number, color: number): void {
-    this.burst(x, y, color, { count: 26, speed: 470, size: 9, life: [560, 1060] });
-    this.ring(x, y, color, 98, 480, 7);
-    this.ring(x, y, 0xffffff, 62, 330, 4);
-    this.ring(x, y, color, 158, 640, 3, 24); // wide slow cascade "wave"
-    this.flash(x, y, w, h, 0xffffff, true, 240);
-    this.shake(7, 240);
+    this.burst(x, y, color, { count: 28, speed: 470, size: 9, life: [700, 1300] });
+    this.ring(x, y, color, 112, 760, 8);
+    this.ring(x, y, 0xffffff, 74, 540, 5);
+    this.ring(x, y, color, 184, 980, 4, 26); // wide slow cascade "wave"
+    this.flash(x, y, w, h, 0xffffff, true, 420);
+    this.shake(4, 200); // softer than before — the screen-jolt was too strong
   }
 
   /** Wrong move: red flash over the WHOLE cell, downward red spray, ring,

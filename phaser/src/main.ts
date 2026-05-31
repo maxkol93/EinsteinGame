@@ -1,15 +1,15 @@
 import Phaser from 'phaser';
-import { COLORS, GAME } from './config';
+import { COLORS, GAME, RENDER_SCALE } from './config';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
 import { GameScene } from './scenes/GameScene';
 
-// Crisp text under Scale.FIT: the 1295×735 backing buffer is stretched to fill
-// the screen, so text textures (rendered at 1×) blur when the canvas is scaled
-// up. Render every Text at a higher internal resolution so it stays sharp even
-// fullscreen on a HiDPI display. Patch the factory once so we don't have to
-// thread .setResolution(...) through dozens of add.text() call sites.
-const TEXT_RES = Math.min(4, Math.max(2, Math.ceil((window.devicePixelRatio || 1) * 1.5)));
+// Extra-crisp text: on top of the camera supersample (RENDER_SCALE) we render
+// every Text at 1.5× internal resolution too, so glyph edges stay sharp at the
+// largest fullscreen sizes. Patch the factory once so we don't thread
+// .setResolution(...) through dozens of add.text() call sites. (Kept modest —
+// the camera already provides RENDER_SCALE× density, this just tops it up.)
+const TEXT_RES = 1.5;
 const factory = Phaser.GameObjects.GameObjectFactory.prototype;
 const baseText = factory.text;
 factory.text = function patchedText(this: Phaser.GameObjects.GameObjectFactory, ...args) {
@@ -22,9 +22,11 @@ const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
   backgroundColor: COLORS.bg,
-  width: GAME.width,
-  height: GAME.height,
-  resolution: window.devicePixelRatio || 1,
+  // render buffer is RENDER_SCALE× the logical size; each scene's camera zooms
+  // back by the same factor (applyRenderScale) so coords stay 1295×735 while
+  // everything is drawn at higher pixel density → crisp under Scale.FIT.
+  width: GAME.width * RENDER_SCALE,
+  height: GAME.height * RENDER_SCALE,
   render: {
     antialias: true,
     roundPixels: true,
