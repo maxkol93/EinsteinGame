@@ -769,6 +769,10 @@ export class TutorialScene extends Phaser.Scene {
     }
   }
 
+  applyReduceMotion(): void {
+    this.fx?.setReduced(settings.reduceMotion);
+  }
+
   private toMenu(): void {
     // keep the director in the registry so progress isn't lost
     this.scene.start('menu');

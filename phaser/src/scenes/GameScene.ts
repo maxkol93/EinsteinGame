@@ -4,7 +4,7 @@ import { generatePuzzle, FieldAndRules, COMPLEXITY } from '../model/fieldAndRule
 import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
-import { makeButton } from '../ui/button';
+import { makeButton, BtnHandle } from '../ui/button';
 import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 import { audio } from '../audio/sound';
@@ -25,7 +25,7 @@ const BX = PORTRAIT ? 14 : PANEL + MARGIN; // board origin x
 const BY = PORTRAIT ? TOP_H : MARGIN; // board origin y
 const CLUE_X = PORTRAIT ? 0 : BX + SPAN + MARGIN; // clues area x (full width in portrait)
 const CLUES_TOP_Y = BY + SPAN + 16; // portrait: clues start below the board
-const RULE_CELL = 38;
+const RULE_CELL = PORTRAIT ? 54 : 38; // bigger clue tiles on mobile
 const RULES_TOP = 54;
 const STEP_MS = 130;
 const HOLD_MS = 350; // long-press duration to "define" a cell
@@ -127,6 +127,9 @@ export class GameScene extends Phaser.Scene {
   private holdTween?: Phaser.Tweens.Tween;
   private idleHintMs: number | null = null;
   private idleTimer?: Phaser.Time.TimerEvent;
+  private hintBtn?: BtnHandle;
+  private armed: { y: number; x: number; n: number } | null = null;
+  private armedCleanup?: () => void;
 
   constructor() {
     super('game');
@@ -196,9 +199,10 @@ export class GameScene extends Phaser.Scene {
     this.bindInput();
     this.startTimer();
 
-    // auto-hint after idle: 20s Easy, 40s Normal, never on Hard / Zen / seeded
-    // (mirrors pygame's per-difficulty idle-hint window)
-    this.idleHintMs = this.zen || this.seededKind ? null : [20000, 40000, null][this.difficulty];
+    // The HINT button is OFFERED after idle (not auto-fired): 20s Easy, 40s
+    // Normal, never on Hard. Always available in Zen. Pressing it shows a hint.
+    this.idleHintMs = this.zen ? null : [20000, 40000, null][this.difficulty];
+    this.hintBtn?.root.setVisible(this.zen);
     this.resetIdle();
 
     audio.playMusic('game');
@@ -255,7 +259,7 @@ export class GameScene extends Phaser.Scene {
     if (PORTRAIT) {
       // a horizontal top strip: MENU | TIME | HINT, then lives/zen + mode below
       makeButton(this, 96, 36, 156, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
-      makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+      this.hintBtn = makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18 });
       this.timerText = this.add.text(GAME.width / 2, 36, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text }).setOrigin(0.5);
       if (this.zen) {
         this.add.text(GAME.width / 2 - 150, 118, '∞', { fontFamily: FONT, fontStyle: 'bold', fontSize: '34px', color: '#86b89a' }).setOrigin(0.5);
@@ -300,7 +304,7 @@ export class GameScene extends Phaser.Scene {
       .text(PANEL / 2, 292, `${cplx} cells given`, { fontFamily: FONT, fontSize: '13px', color: palette.accent })
       .setOrigin(0.5);
 
-    makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+    this.hintBtn = makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18 });
   }
 
   private heartPos(i: number): { cx: number; cy: number } {
@@ -651,12 +655,46 @@ export class GameScene extends Phaser.Scene {
       if (this.press && !this.press.fired) {
         const { y, x, n } = this.press;
         this.press.fired = true;
-        this.doAction(y, x, n, false);
+        if (settings.touch) this.tapSelect(y, x, n);
+        else this.doAction(y, x, n, false);
       }
       this.press = null;
       this.longPress?.remove();
       this.longPress = undefined;
     });
+  }
+
+  /** Touch tap-to-select: the first tap ARMS a candidate (a pulsing frame +
+   *  "tap again"); a second tap on the SAME candidate commits the pop. Tapping
+   *  a different candidate re-arms it. (Long-press still defines.) */
+  private tapSelect(y: number, x: number, n: number): void {
+    if (this.armed && this.armed.y === y && this.armed.x === x && this.armed.n === n) {
+      this.clearArmed();
+      this.doAction(y, x, n, false);
+    } else {
+      this.setArmed(y, x, n);
+    }
+  }
+
+  private setArmed(y: number, x: number, n: number): void {
+    this.clearArmed();
+    const chip = this.chips[y][x].get(n);
+    if (!chip) return;
+    this.armed = { y, x, n };
+    const g = this.add.graphics().setDepth(24);
+    const r = chip.sub * 0.72;
+    const prompt = this.add.text(chip.cx, chip.cy - chip.sub * 0.9, 'tap again', { fontFamily: FONT, fontSize: '12px', color: palette.text, backgroundColor: '#1c1a1ecc', padding: { x: 5, y: 2 } }).setOrigin(0.5).setDepth(26);
+    const tween = this.tweens.addCounter({
+      from: 0.4, to: 1, duration: 480, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      onUpdate: (tw) => { const a = tw.getValue() ?? 1; g.clear(); g.lineStyle(3, COLORS.accent, a); g.strokeRoundedRect(chip.cx - r, chip.cy - r, r * 2, r * 2, 8); },
+    });
+    this.armedCleanup = () => { tween.stop(); g.destroy(); prompt.destroy(); };
+  }
+
+  private clearArmed(): void {
+    this.armedCleanup?.();
+    this.armedCleanup = undefined;
+    this.armed = null;
   }
 
   private onChipDown(y: number, x: number, n: number, pointer: Phaser.Input.Pointer): void {
@@ -710,6 +748,7 @@ export class GameScene extends Phaser.Scene {
     if (this.busy || this.gameOver) return;
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
+    this.clearArmed(); // any committed move clears the touch-arm
     this.clearHint(); // any move dismisses the hint highlight
     this.resetIdle(); // a move restarts the idle-hint countdown
     this.hoverEnd(); // drop any highlight before the board mutates
@@ -917,13 +956,21 @@ export class GameScene extends Phaser.Scene {
     this.hintActive = null;
   }
 
-  /** Restart the idle-hint countdown; when it elapses the hint auto-shows. */
+  /** Apply the current reduce-motion setting live (the menu toggle calls this
+   *  on the paused game so it takes effect immediately, not next game). */
+  applyReduceMotion(): void {
+    this.fx?.setReduced(settings.reduceMotion);
+  }
+
+  /** Restart the idle countdown; when it elapses the HINT button is REVEALED
+   *  (it then stays available for the rest of the round). */
   private resetIdle(): void {
     this.idleTimer?.remove();
     this.idleTimer = undefined;
     if (this.idleHintMs == null) return;
+    if (this.hintBtn?.root.visible) return; // already offered — leave it up
     this.idleTimer = this.time.delayedCall(this.idleHintMs, () => {
-      if (!this.busy && !this.gameOver && !this.hintActive) this.hint();
+      this.hintBtn?.root.setVisible(true);
     });
   }
 
@@ -1046,7 +1093,7 @@ export class GameScene extends Phaser.Scene {
           .image(sx, sy, strokedRoundedTex(this, 64, 64, 12, 5))
           .setScale(miniScale).setTint(0xffffff).setAlpha(0);
         const t = this.add
-          .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '19px', color: '#ffffff' })
+          .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: PORTRAIT ? '27px' : '19px', color: '#ffffff' })
           .setOrigin(0.5);
         // outline is NOT in objs — the dim pass must not leave it visible at
         // 0.32; it's controlled only via glow/dimGroup.
@@ -1054,7 +1101,7 @@ export class GameScene extends Phaser.Scene {
         minis.push({ img, txt: t, outline, value: v, scale: miniScale });
       } else {
         const t = this.add
-          .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: palette.accent })
+          .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: PORTRAIT ? '30px' : '22px', color: palette.accent })
           .setOrigin(0.5);
         objs.push(t);
       }
@@ -1266,79 +1313,82 @@ export class GameScene extends Phaser.Scene {
             : ''
       : '';
 
-    // Measure top-down, then centre the panel around the content so nothing
-    // collides with the buttons regardless of how many badges were earned.
-    const PAD = 34;
+    // Measure top-down, then centre the panel around the content. Everything
+    // scales up on mobile (portrait) so the plaque is comfortably legible.
+    const f = PORTRAIT ? 1.4 : 1;
+    const fs = (n: number): string => `${Math.round(n * f)}px`;
+    const PAD = 34 * f;
     let h = PAD;
-    if (won && this.newRecord) h += 30;
-    h += 52; // title
-    h += 32; // subtitle
-    if (bestLine) h += 24;
-    if (hasBadges) h += 18 + 6 + this.freshBadges.length * 26;
-    h += 26; // gap before buttons
-    const btnBlock = 52 + 14 + 48;
-    h += btnBlock + PAD;
+    if (won && this.newRecord) h += 30 * f;
+    h += 52 * f; // title
+    h += 32 * f; // subtitle
+    if (bestLine) h += 24 * f;
+    if (hasBadges) h += (18 + 6 + this.freshBadges.length * 26) * f;
+    h += 26 * f; // gap before buttons
+    const btnH = 52 * f;
+    const menuH = 48 * f;
+    h += btnH + 14 * f + menuH + PAD;
 
-    const pw = 480;
+    const pw = Math.round(480 * f);
     const ph = h;
     const cx = GAME.width / 2;
     const cyPanel = GAME.height / 2;
     const top = cyPanel - ph / 2;
 
     this.add.rectangle(cx, cyPanel, GAME.width, GAME.height, 0x000000, 0.62).setDepth(100);
-    this.add.image(cx, cyPanel, roundedTex(this, pw, ph, 18)).setTint(COLORS.panel).setDepth(101);
+    this.add.image(cx, cyPanel, roundedTex(this, pw, Math.round(ph), 18)).setTint(COLORS.panel).setDepth(101);
     // gold border on a win, red on a loss (mirrors the pygame plaque)
-    this.add.image(cx, cyPanel, strokedRoundedTex(this, pw, ph, 18, 3)).setTint(won ? 0xffd678 : 0xe05a68).setDepth(101);
+    this.add.image(cx, cyPanel, strokedRoundedTex(this, pw, Math.round(ph), 18, 3)).setTint(won ? 0xffd678 : 0xe05a68).setDepth(101);
 
     let y = top + PAD;
 
     if (won && this.newRecord) {
       const banner = this.add
-        .text(cx, y + 15, '★  NEW RECORD!  ★', { fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#ffd678' })
+        .text(cx, y + 15 * f, '★  NEW RECORD!  ★', { fontFamily: FONT, fontStyle: 'bold', fontSize: fs(22), color: '#ffd678' })
         .setOrigin(0.5).setDepth(102);
       this.tweens.add({ targets: banner, scale: 1.08, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-      y += 30;
+      y += 30 * f;
     }
 
     this.add
-      .text(cx, y + 26, won ? 'SOLVED!' : 'OUT OF LIVES', {
-        fontFamily: FONT, fontStyle: 'bold', fontSize: '42px', color: won ? '#ffe27a' : '#e05a68',
+      .text(cx, y + 26 * f, won ? 'SOLVED!' : 'OUT OF LIVES', {
+        fontFamily: FONT, fontStyle: 'bold', fontSize: fs(42), color: won ? '#ffe27a' : '#e05a68',
       })
       .setOrigin(0.5).setDepth(102);
-    y += 52;
+    y += 52 * f;
 
     this.add
-      .text(cx, y + 16, won ? `Time ${this.fmt(this.seconds)}   ·   ${this.mistakes} mistakes` : 'Better luck on the next board', {
-        fontFamily: FONT, fontSize: '20px', color: palette.accent,
+      .text(cx, y + 16 * f, won ? `Time ${this.fmt(this.seconds)}   ·   ${this.mistakes} mistakes` : 'Better luck on the next board', {
+        fontFamily: FONT, fontSize: fs(20), color: palette.accent,
       })
       .setOrigin(0.5).setDepth(102);
-    y += 32;
+    y += 32 * f;
 
     if (bestLine) {
       this.add
-        .text(cx, y + 12, bestLine, { fontFamily: FONT, fontSize: '16px', color: palette.accent })
+        .text(cx, y + 12 * f, bestLine, { fontFamily: FONT, fontSize: fs(16), color: palette.accent })
         .setOrigin(0.5).setDepth(102);
-      y += 24;
+      y += 24 * f;
     }
 
     if (hasBadges) {
       this.add
-        .text(cx, y + 8, 'NEW BADGE', { fontFamily: FONT, fontStyle: 'bold', fontSize: '14px', color: '#ffd678' })
+        .text(cx, y + 8 * f, 'NEW BADGE', { fontFamily: FONT, fontStyle: 'bold', fontSize: fs(14), color: '#ffd678' })
         .setOrigin(0.5).setDepth(102);
-      y += 18 + 6;
+      y += (18 + 6) * f;
       for (const name of this.freshBadges) {
         this.add
-          .text(cx, y + 13, `★  ${name}`, { fontFamily: FONT, fontSize: '18px', color: palette.text })
+          .text(cx, y + 13 * f, `★  ${name}`, { fontFamily: FONT, fontSize: fs(18), color: palette.text })
           .setOrigin(0.5).setDepth(102);
-        y += 26;
+        y += 26 * f;
       }
     }
 
-    const btnY = y + 26 + 26;
-    const bw = 200; // leaves a comfortable margin inside the 480px panel
-    const b1 = makeButton(this, cx - bw / 2 - 8, btnY, bw, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, zen: this.zen }), { fontSize: 19, fill: COLORS.rows['4'], textColor: '#ffffff' });
-    const b2 = makeButton(this, cx + bw / 2 + 8, btnY, bw, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true, zen: this.zen }), { fontSize: 19 });
-    const b3 = makeButton(this, cx, btnY + 52 / 2 + 14 + 48 / 2, 280, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
+    const btnY = y + 52 * f;
+    const bw = 200 * f; // comfortable margin inside the panel
+    const b1 = makeButton(this, cx - bw / 2 - 8 * f, btnY, bw, btnH, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, zen: this.zen }), { fontSize: Math.round(19 * f), fill: COLORS.rows['4'], textColor: '#ffffff' });
+    const b2 = makeButton(this, cx + bw / 2 + 8 * f, btnY, bw, btnH, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true, zen: this.zen }), { fontSize: Math.round(19 * f) });
+    const b3 = makeButton(this, cx, btnY + btnH / 2 + 14 * f + menuH / 2, 280 * f, menuH, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: Math.round(18 * f) });
     [b1, b2, b3].forEach((b) => b.root.setDepth(102));
   }
 

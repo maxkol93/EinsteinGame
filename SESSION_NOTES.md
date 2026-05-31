@@ -2,6 +2,37 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: 9 more fixes (hint button, particles, touch, progress, music)
+
+1. **Hint = a button, not auto** — the HINT button is now hidden and REVEALED
+   after the idle window (20s Easy / 40s Normal / never Hard; always in Zen).
+   Pressing it shows the hint; it stays available the rest of the round.
+2. **Pop particles** — were a stack of concentric rings; now ONE subtle ring +
+   a spray of FILLED dots flying out from the cell centre (like pygame
+   small_pop). The pop reads as scatter, not rings.
+3. **Reduce motion applies live** — the menu toggle calls `applyReduceMotion()`
+   on the paused game/tutorial, not just the next game.
+4. **Progress redesigned** — achievements moved to a LEFT column of gold medal
+   badges (hover tooltip); the table fills the right pane vertically; daily/
+   weekly/monthly rows now show milestone stars by completion COUNT (streak
+   dropped); locked milestones are GREY STARS (not dots).
+5/6. **Options panel** — Tutorial/Progress buttons given a lighter fill (no
+   longer sink into the panel); elements distributed to fill, panel height now
+   matches the left column.
+7. **Mobile sizing** — bigger clue tiles (`RULE_CELL` 38→54) + glyphs, and the
+   end panel scales ×1.4 in portrait (fonts/buttons/padding).
+8. **Tap-to-select** wired: with `touch` on, a first tap ARMS a candidate
+   (pulsing frame + "tap again"), a second tap on the same one pops it; a
+   different tap re-arms; long-press still defines.
+9. **Music restore from 0** — `setMusicVolume` now re-asserts playback when
+   raised from 0 (WebAudio can cull a silent loop), and recreates the bed if it
+   was torn down.
+
+Verified: typecheck/build/smoke(270)/verify green; probes confirmed music
+restores from 0, the hint button is hidden at start (Easy) + tap-to-select
+arms→pops; screenshot confirms the two-pane Progress (medals + grey milestone
+stars).
+
 ## 2026-05-31 — Phaser: 14 fixes (sliders, hints, particles, panels, stats)
 
 1. **Tutorial entry error sound** — a wrong gesture on a block-0 gated level now

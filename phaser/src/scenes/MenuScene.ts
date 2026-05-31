@@ -129,7 +129,7 @@ export class MenuScene extends Phaser.Scene {
     y += 42;
     makeToggle(this, cx - bw / 2, y, bw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
     y += 42;
-    makeToggle(this, cx - bw / 2, y, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; });
+    makeToggle(this, cx - bw / 2, y, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); });
     y += 42;
     makeToggle(this, cx - bw / 2, y, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
     y += 56;
@@ -217,32 +217,35 @@ export class MenuScene extends Phaser.Scene {
     const px = PANEL_X;
     const py = 168;
     const pw = PANEL_W;
-    const ph = 436;
+    const ph = 398; // matches the left column's vertical extent (~178..576)
     this.add.image(px, py, roundedTex(this, pw, ph, 18)).setOrigin(0, 0).setTint(brighten(COLORS.bg, 11));
     this.add.image(px, py, strokedRoundedTex(this, pw, ph, 18, 2)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 30));
-    this.add.text(px + pw / 2, py + 24, 'O P T I O N S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(2);
+    this.add.text(px + pw / 2, py + 26, 'O P T I O N S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(2);
 
     const ix = px + 28;
     const iw = pw - 56;
-    let y = py + 48;
-
+    // distribute SOUND, MUSIC, 4 toggles and the two buttons evenly over the
+    // panel so nothing leaves dead space at the bottom
+    let y = py + 60;
     makeSlider(this, ix, y, iw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v));
-    y += 52;
+    y += 58;
     makeSlider(this, ix, y, iw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v));
-    y += 56;
-
-    makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
-    y += 34;
-    makeToggle(this, ix, y, iw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
-    y += 34;
-    makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; });
-    y += 34;
-    makeToggle(this, ix, y, iw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
     y += 60;
+    makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
+    y += 40;
+    makeToggle(this, ix, y, iw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
+    y += 40;
+    makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); });
+    y += 40;
+    makeToggle(this, ix, y, iw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
 
+    // buttons pinned near the panel bottom, with a clearly lighter fill so they
+    // don't sink into the panel background
     const half = (iw - 12) / 2;
-    makeButton(this, ix + half / 2, y, half, 46, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 16 });
-    makeButton(this, ix + half + 12 + half / 2, y, half, 46, '☆  Progress', () => openStatsOverlay(this), { fontSize: 16 });
+    const by = py + ph - 36;
+    const btnFill = brighten(COLORS.panel, 40);
+    makeButton(this, ix + half / 2, by, half, 48, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 16, fill: btnFill });
+    makeButton(this, ix + half + 12 + half / 2, by, half, 48, '☆  Progress', () => openStatsOverlay(this), { fontSize: 16, fill: btnFill });
   }
 
   private showBadgeTip(x: number, text: string): void {
@@ -316,6 +319,14 @@ export class MenuScene extends Phaser.Scene {
   private continueGame(): void {
     this.scene.resume('game');
     this.scene.stop();
+  }
+
+  /** Push the reduce-motion setting to a live/paused game so it applies now. */
+  private applyReduceMotionLive(): void {
+    const g = this.scene.get('game') as Phaser.Scene & { applyReduceMotion?: () => void };
+    g?.applyReduceMotion?.();
+    const t = this.scene.get('tutorial') as Phaser.Scene & { applyReduceMotion?: () => void };
+    t?.applyReduceMotion?.();
   }
 
   /** Pick a tutorial block to play/replay (port of pygame BlockSelectOverlay). */

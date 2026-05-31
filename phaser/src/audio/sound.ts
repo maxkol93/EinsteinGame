@@ -186,7 +186,14 @@ class AudioManager {
 
   setMusicVolume(v: number): void {
     this.musicVolume = clamp01(v);
-    if (this.music) (this.music as Phaser.Sound.WebAudioSound).setVolume?.(this.musicVolume);
+    if (this.music) {
+      (this.music as Phaser.Sound.WebAudioSound).setVolume(this.musicVolume);
+      // raising from 0 must always bring the bed back — if WebAudio culled the
+      // silent loop (it can), re-assert playback
+      if (this.musicVolume > 0 && this.musicOn && !this.music.isPlaying) this.music.play();
+    } else if (this.musicVolume > 0 && this.musicContext) {
+      this.playMusic(this.musicContext);
+    }
     this.persist();
   }
 

@@ -139,12 +139,12 @@ export class Fx {
     this.scene.tweens.add({ targets: img, alpha: 0, duration: life, ease: 'Quad.easeIn', onComplete: () => img.destroy() });
   }
 
-  /** Candidate tile pop — small + snappy spark spray + ring. Held a touch
-   *  longer so the pop is actually readable. */
+  /** Candidate tile pop — the core juice: a spray of FILLED dots flying out
+   *  from the cell centre, plus ONE subtle ring (pygame small_pop = a burst +
+   *  a single ring, not a stack of concentric circles). */
   smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 16, speed: 290, size: 7, life: [520, 980] });
-    this.ring(x, y, color, 44, 560, 6);
-    this.ring(x, y, 0xffffff, 26, 360, 2);
+    this.burst(x, y, color, { count: 14, speed: 330, size: 7, life: [380, 720], gravity: 300 });
+    this.ring(x, y, color, 30, 360, 3);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
