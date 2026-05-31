@@ -3,6 +3,7 @@ import { COLORS, GAME, RENDER_SCALE } from './config';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
 import { GameScene } from './scenes/GameScene';
+import { TutorialScene } from './scenes/TutorialScene';
 
 // Extra-crisp text: on top of the camera supersample (RENDER_SCALE) we render
 // every Text at 1.5× internal resolution too, so glyph edges stay sharp at the
@@ -35,7 +36,7 @@ const game = new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, MenuScene, GameScene],
+  scene: [BootScene, MenuScene, GameScene, TutorialScene],
 } as Phaser.Types.Core.GameConfig);
 
 // handy for debugging / automated checks from the browser console

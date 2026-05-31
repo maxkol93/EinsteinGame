@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/sound';
+import { settings } from '../model/settings';
 
 /**
  * Boot: load the SFX/music bank, wait for the DejaVu Sans webfont so the first
@@ -17,7 +18,10 @@ export class BootScene extends Phaser.Scene {
 
   create(): void {
     audio.init(this.game);
-    const go = () => this.scene.start('menu');
+    // A brand-new player (no onboarding cleared yet) goes straight into the
+    // tutorial; everyone else lands on the menu.
+    const first = settings.tutorialBlocks === 0;
+    const go = () => this.scene.start(first ? 'tutorial' : 'menu');
     const fonts = (document as unknown as { fonts?: FontFaceSet }).fonts;
     if (fonts?.load) {
       Promise.all([fonts.load('16px "DejaVu Sans"'), fonts.load('bold 16px "DejaVu Sans"')])

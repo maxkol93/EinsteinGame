@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "smoke": "tsx tools/smoke.ts",
+    "tut-smoke": "tsx tools/tut-smoke.ts",
     "verify": "node tools/verify.mjs"
   },
   "dependencies": {

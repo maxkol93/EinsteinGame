@@ -6,6 +6,7 @@ import { stats } from '../model/stats';
 import { settings } from '../model/settings';
 import { sizeLocks, diffLocks, sizeUnlocked } from '../model/progression';
 import { ACHIEVEMENTS, achievementInfo } from '../model/achievements';
+import { TutorialDirector } from '../model/tutorial';
 
 const SIZES = [4, 5, 6];
 const DIFFS = ['Easy', 'Normal', 'Hard'];
@@ -40,6 +41,7 @@ export class MenuScene extends Phaser.Scene {
     audio.startMusic();
     this.buildAudioToggles();
     this.buildZenToggle();
+    this.buildTutorialButton();
 
     // U toggles the debug unlock-all (mirrors pressing U in the pygame build).
     this.input.keyboard?.on('keydown-U', () => {
@@ -209,6 +211,20 @@ export class MenuScene extends Phaser.Scene {
 
   private zenLabel(): string {
     return settings.zen ? '☯  ZEN ON' : '☯  ZEN OFF';
+  }
+
+  /** Top-left tutorial button (under the Zen toggle): replays the onboarding,
+   *  or resumes it if the player left part-way through. */
+  private buildTutorialButton(): void {
+    const w = 156;
+    const x = w / 2 + 24;
+    const label = settings.tutorialDone ? '↺  TUTORIAL' : '▶  TUTORIAL';
+    makeButton(this, x, 88, w, 40, label, () => {
+      const d = new TutorialDirector(settings.tutorialBlocks);
+      if (settings.tutorialDone) d.restartAll(); // a full replay from block 0
+      this.registry.set('tutorialDirector', d);
+      this.scene.start('tutorial');
+    }, { fontSize: 15 });
   }
 
   private showNotice(msg: string): void {

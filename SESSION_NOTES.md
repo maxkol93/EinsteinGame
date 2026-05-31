@@ -2,6 +2,39 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: full tutorial (6-block onboarding)
+
+Ported the entire onboarding from `model/tutorial.py` + the presenter/view
+tutorial paths — blocks, rules, progress, popups, texts and animations.
+
+- **`model/tutorial.ts`** — full port of `TutorialDirector` + the 3x3 generator:
+  block 0 "Entry" (free gesture practice, 6 levels 4-6-8-4-6-8 cells, tap-only
+  0-2 / hold-only 3-5) and blocks 1..5 (one rule type each, then Mixed),
+  generated and verified with `SelfWalkthrough` so every level is solvable in
+  exactly `level+1` clicks with every clue essential. All texts, the tracker,
+  mistake/praise/reminder logic, intro/gesture popups. Unseeded (Math.random).
+- **`ui/tutorialPopup.ts`** — the message panel over a dimmed board with an
+  optional pulsing **spotlight** and the two **looped gesture demos** drawn live
+  on a Graphics: `pop_to_solve` (cursor taps two candidates, the third blooms)
+  and `hold_to_define` (cursor holds, a fill-ring completes, the cell snaps).
+- **`scenes/TutorialScene.ts`** — 3x3 board reusing the game's chips/big-cell/
+  cascade/hold-ring/fx machinery; left panel = the 6-block tracker; right =
+  clues (blocks 1+); enforces block-0's tap/hold split (wrong gesture = silent
+  nudge) and scores logic-block mistakes (wrong removal → block resets, teaching
+  popup); the result overlay (LEVEL/BLOCK/TUTORIAL CLEAR + tracker + Continue).
+  Director persists across per-level `scene.restart` via the registry.
+- **Entry:** `model/board.ts` gained a `free` mode (cell keeps the player's
+  remaining candidate, no solution-correction) for block 0. `settings.ts` stores
+  `tutorial_blocks` (0..6). `BootScene` sends a brand-new player straight into
+  the tutorial; the menu has a ▶/↺ TUTORIAL button (resume / replay). Finishing
+  unlocks the `tutorial` achievement.
+- **Verified:** `typecheck` clean; `npm run tut-smoke` 420 levels (all solvable,
+  director reaches 'tutorial'); `npm run smoke` 270 normal boards still 0 fails
+  (free flag safe); standard `verify` green. Screenshots confirm the welcome
+  popup + live A/B/C demo, block-1 intro with clues + spotlight, and the result
+  overlay with the progress tracker. (Full 21-level headless drive is too slow
+  under throttled rAF, so it's verified per-stage, not end-to-end.)
+
 ## 2026-05-31 — Phaser: polish pass #3 (juice/feel)
 
 1. **Chip hung in the air after a WRONG tap** — doAction's `hoverEnd()` starts a

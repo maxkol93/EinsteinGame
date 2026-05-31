@@ -41,14 +41,18 @@ export class PuzzleBoard {
   readonly solution: number[][];
   definedCount = 0;
   rowCascade = true;
+  // Free mode (the tutorial's gesture block): a cell resolves to whatever
+  // candidate is left, NOT corrected to the solution — any pop/define is valid.
+  readonly free: boolean;
 
   private placed = new Set<number>();
   private cs: ChangeSet = { struck: [], resolved: [] };
   private step = 0;
 
-  constructor(size: number, solution: number[][], startCells: Rule[] = []) {
+  constructor(size: number, solution: number[][], startCells: Rule[] = [], free = false) {
     this.size = size;
     this.solution = solution;
+    this.free = free;
     this.cells = [];
     for (let y = 0; y < size; y++) {
       const row: CellState[] = [];
@@ -108,9 +112,12 @@ export class PuzzleBoard {
 
   private cascadeResolve(row: number, x: number, n: number): void {
     // resolve to the cell's correct value when known, so a stale cascade beat
-    // can't place a value already solved elsewhere in the row
-    const sv = this.solution[row]?.[x];
-    if (sv !== undefined) n = sv;
+    // can't place a value already solved elsewhere in the row (skipped in free
+    // mode, where the cell keeps whatever candidate the player left)
+    if (!this.free) {
+      const sv = this.solution[row]?.[x];
+      if (sv !== undefined) n = sv;
+    }
 
     const cell = this.cells[row][x];
     if (cell.value !== null) return;

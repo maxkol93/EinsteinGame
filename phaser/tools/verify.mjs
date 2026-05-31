@@ -17,6 +17,11 @@ const page = await browser.newPage({ viewport: { width: 1295, height: 735 } });
 page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
+// a brand-new player auto-enters the tutorial; mark it done so this check lands
+// on the menu (the tutorial has its own check)
+await page.addInitScript(() => {
+  try { localStorage.setItem('einsteingame_settings', JSON.stringify({ tutorial_blocks: 6 })); } catch { /* ignore */ }
+});
 await page.goto(url, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.game?.scene?.isActive('menu'), { timeout: 10000 });
 await page.waitForTimeout(600);
