@@ -18,10 +18,10 @@ import { PORTRAIT } from '../config';
 // mobile build (a top info strip, a width-maximised board, clues below it).
 const GAP = 3;
 const TOP_H = 176; // portrait top-strip height
-const SPAN = PORTRAIT ? GAME.width - 28 : 615;
-const MARGIN = PORTRAIT ? 14 : 60;
+const SPAN = PORTRAIT ? GAME.width - 12 : 615; // board fills almost full width
+const MARGIN = PORTRAIT ? 6 : 60;
 const PANEL = PORTRAIT ? GAME.width : 280; // landscape side-panel width
-const BX = PORTRAIT ? 14 : PANEL + MARGIN; // board origin x
+const BX = PORTRAIT ? 6 : PANEL + MARGIN; // board origin x
 const BY = PORTRAIT ? TOP_H : MARGIN; // board origin y
 const CLUE_X = PORTRAIT ? 0 : BX + SPAN + MARGIN; // clues area x (full width in portrait)
 const CLUES_TOP_Y = BY + SPAN + 16; // portrait: clues start below the board
@@ -259,7 +259,7 @@ export class GameScene extends Phaser.Scene {
     if (PORTRAIT) {
       // a horizontal top strip: MENU | TIME | HINT, then lives/zen + mode below
       makeButton(this, 96, 36, 156, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
-      this.hintBtn = makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+      this.hintBtn = makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18, fill: brighten(COLORS.panel, 44) });
       this.timerText = this.add.text(GAME.width / 2, 36, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text }).setOrigin(0.5);
       if (this.zen) {
         this.add.text(GAME.width / 2 - 150, 118, '∞', { fontFamily: FONT, fontStyle: 'bold', fontSize: '34px', color: '#86b89a' }).setOrigin(0.5);
@@ -304,7 +304,7 @@ export class GameScene extends Phaser.Scene {
       .text(PANEL / 2, 292, `${cplx} cells given`, { fontFamily: FONT, fontSize: '13px', color: palette.accent })
       .setOrigin(0.5);
 
-    this.hintBtn = makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18 });
+    this.hintBtn = makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18, fill: brighten(COLORS.panel, 44) });
   }
 
   private heartPos(i: number): { cx: number; cy: number } {
@@ -772,7 +772,7 @@ export class GameScene extends Phaser.Scene {
       this.chips[s.y][s.x].delete(s.n);
       const delay = s.step * STEP_MS;
       this.destroyChip(chip, delay);
-      this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n)));
+      this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n), chip.sub));
     }
 
     // Audio mirrors view/window.py: each *resolving* cell ticks a 'pick' at its
@@ -980,6 +980,13 @@ export class GameScene extends Phaser.Scene {
     const target = this.findHintTarget();
     if (!target) return;
     const { chip, group } = target;
+
+    // using the hint hides the button again and restarts the idle countdown
+    // (so it re-appears after another idle window). Zen keeps it always up.
+    if (!this.zen) {
+      this.hintBtn?.root.setVisible(false);
+      this.resetIdle();
+    }
 
     audio.play('spread');
     this.fx.ring(chip.cx, chip.cy, 0xffd678, 36, 560, 4);

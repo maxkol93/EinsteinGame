@@ -5,7 +5,7 @@ import { roundedTex, strokedRoundedTex } from './textures';
 import { stats, modeKey } from '../model/stats';
 import { ACHIEVEMENTS } from '../model/achievements';
 
-const MILESTONES = [5, 10, 20, 50, 100];
+const MILESTONES = [3, 5, 10, 20, 50];
 const DIFFS: Array<[string, number]> = [['Easy', 0], ['Normal', 1], ['Hard', 2]];
 const SIZES = [4, 5, 6];
 

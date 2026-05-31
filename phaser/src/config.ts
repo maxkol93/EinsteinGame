@@ -38,7 +38,7 @@ export const FONT = '"DejaVu Sans", Arial, sans-serif';
 // _detect_portrait() decision.
 function detectPortrait(): boolean {
   try {
-    return typeof window !== 'undefined' && window.innerHeight > window.innerWidth * 1.05;
+    return typeof window !== 'undefined' && window.innerHeight > window.innerWidth;
   } catch {
     return false;
   }
@@ -46,8 +46,10 @@ function detectPortrait(): boolean {
 export const PORTRAIT = detectPortrait();
 
 // Canvas: landscape mirrors the pygame side-panel build (left panel, 615px
-// board, right clue panel); portrait mirrors the 760×1256 mobile build.
-export const GAME = PORTRAIT ? { width: 760, height: 1256 } : { width: 1295, height: 735 };
+// board, right clue panel). Portrait uses a tall ~9:19 aspect close to real
+// phones (so Scale.FIT barely letterboxes) and a narrower 560px design width so
+// elements aren't shrunk into illegibility by the fit-scale.
+export const GAME = PORTRAIT ? { width: 560, height: 1180 } : { width: 1295, height: 735 };
 
 // Supersample factor: the game logic/layout stays in GAME.width×GAME.height
 // coords, but the actual render buffer is RENDER_SCALE× bigger and each scene's

@@ -18,11 +18,11 @@ import { TutorialPopup, TutorialAnim } from '../ui/tutorialPopup';
 // Layout mirrors the landscape game (a left panel, the board, a right clue
 // panel) but the board is a big 3x3 and the left panel is the block tracker.
 const GAP = 4;
-const SPAN = PORTRAIT ? 600 : 540;
+const SPAN = PORTRAIT ? GAME.width - 36 : 540;
 const MARGIN = PORTRAIT ? 14 : 60;
 const PANEL = PORTRAIT ? GAME.width : 300;
 const BX = PORTRAIT ? Math.floor((GAME.width - SPAN) / 2) : PANEL + MARGIN;
-const BY = PORTRAIT ? 250 : 110;
+const BY = PORTRAIT ? 220 : 110;
 const CLUE_X = PORTRAIT ? 0 : BX + SPAN + MARGIN;
 const TUT_CLUES_TOP = BY + SPAN + 18; // portrait: clues below the board
 const RULE_CELL = 44;
@@ -172,36 +172,37 @@ export class TutorialScene extends Phaser.Scene {
   }
 
   /** The 6-block progress tracker (port of draw_tutorial_progress). */
-  private drawTracker(tracker: TrackerRow[], x: number, y: number, width: number, depth = 1): void {
-    const rowH = 38;
+  private drawTracker(tracker: TrackerRow[], x: number, y: number, width: number, depth = 1, rowH = 38): void {
+    const sc = rowH / 38; // scale fonts/dots with the row height
     const muted = brighten(COLORS.panel, 70);
     tracker.forEach((row, i) => {
       const ry = y + i * rowH;
       const rh = rowH - 6;
-      const mcx = x + 15;
+      const mcx = x + 16 * sc;
       const mcy = ry + rh / 2;
+      const dotR = 9 * sc;
       if (row.current) {
         this.add.image(x + width / 2, mcy, roundedTex(this, Math.ceil(width), Math.ceil(rh), 8)).setTint(brighten(COLORS.panel, 30)).setDepth(depth);
       }
       const dot = this.add.graphics().setDepth(depth + 1);
       if (row.done) {
-        dot.fillStyle(COLORS.accent, 1); dot.fillCircle(mcx, mcy, 9);
+        dot.fillStyle(COLORS.accent, 1); dot.fillCircle(mcx, mcy, dotR);
       } else if (row.current) {
-        dot.lineStyle(2, COLORS.accent, 1); dot.strokeCircle(mcx, mcy, 9);
+        dot.lineStyle(2, COLORS.accent, 1); dot.strokeCircle(mcx, mcy, dotR);
       } else {
-        dot.lineStyle(2, muted, 1); dot.strokeCircle(mcx, mcy, 8);
+        dot.lineStyle(2, muted, 1); dot.strokeCircle(mcx, mcy, dotR);
       }
       if (row.done) {
-        this.add.text(mcx, mcy, '✓', { fontFamily: FONT, fontSize: '12px', color: '#1a181c' }).setOrigin(0.5).setDepth(depth + 2);
+        this.add.text(mcx, mcy, '✓', { fontFamily: FONT, fontSize: `${Math.round(12 * sc)}px`, color: '#1a181c' }).setOrigin(0.5).setDepth(depth + 2);
       }
       const nameCol = row.current || row.done ? palette.text : '#7a737a';
-      const nameT = this.add.text(x + 32, mcy, row.name, { fontFamily: FONT, fontSize: '16px', color: nameCol }).setOrigin(0, 0.5).setDepth(depth + 1);
+      const nameT = this.add.text(x + 34 * sc, mcy, row.name, { fontFamily: FONT, fontSize: `${Math.round(16 * sc)}px`, color: nameCol }).setOrigin(0, 0.5).setDepth(depth + 1);
       if (row.done) {
         const line = this.add.graphics().setDepth(depth + 2);
         line.lineStyle(2, muted, 1);
-        line.lineBetween(x + 32, mcy, x + 32 + nameT.width, mcy);
+        line.lineBetween(x + 34 * sc, mcy, x + 34 * sc + nameT.width, mcy);
       }
-      this.add.text(x + width - 8, mcy, `${row.cleared}/${row.total}`, { fontFamily: FONT, fontSize: '15px', color: row.current ? palette.accent : nameCol }).setOrigin(1, 0.5).setDepth(depth + 1);
+      this.add.text(x + width - 8, mcy, `${row.cleared}/${row.total}`, { fontFamily: FONT, fontSize: `${Math.round(15 * sc)}px`, color: row.current ? palette.accent : nameCol }).setOrigin(1, 0.5).setDepth(depth + 1);
     });
   }
 
@@ -574,7 +575,7 @@ export class TutorialScene extends Phaser.Scene {
       this.chips[s.y][s.x].delete(s.n);
       const delay = s.step * STEP_MS;
       this.destroyChip(chip, delay);
-      this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n)));
+      this.time.delayedCall(delay + 60, () => this.fx.smallBurst(chip.cx, chip.cy, rowColor(s.n), chip.sub));
     }
     for (const r of cs.resolved) {
       const delay = r.step * STEP_MS;
@@ -736,26 +737,30 @@ export class TutorialScene extends Phaser.Scene {
     this.lastResult = result;
     const message = result.final || result.praise || result.reminder || (result.goalHint ? GOAL_HINT : null);
     const isEnd = result.outcome === 'tutorial';
+    const f = PORTRAIT ? 1.45 : 1;
+    const fs = (n: number) => `${Math.round(n * f)}px`;
     const cx = GAME.width / 2;
-    const lines = message ? this.wrapLines(message, 420) : [];
+    const pw = Math.round(PORTRAIT ? GAME.width - 50 : 480);
+    const lines = message ? this.wrapLines(message, pw - 60) : [];
     const trackerRows = this.dir.tracker();
-    const ph = 150 + lines.length * 24 + trackerRows.length * 38 + 80;
+    const trkRowH = Math.round(38 * f);
+    const ph = Math.round(150 * f) + lines.length * Math.round(24 * f) + trackerRows.length * trkRowH + Math.round(50 * f);
     const cy = GAME.height / 2;
     const top = cy - ph / 2;
 
     this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.66).setDepth(200).setInteractive();
-    this.add.image(cx, cy, roundedTex(this, 480, ph, 22)).setTint(COLORS.panel).setDepth(201);
-    this.add.image(cx, cy, strokedRoundedTex(this, 480, ph, 22, 3)).setTint(0xffd678).setDepth(201);
-    this.add.text(cx, top + 46, TITLE[result.outcome] ?? 'LEVEL CLEAR', { fontFamily: FONT, fontStyle: 'bold', fontSize: '30px', color: '#ffe27a' }).setOrigin(0.5).setDepth(202);
+    this.add.image(cx, cy, roundedTex(this, pw, ph, 22)).setTint(COLORS.panel).setDepth(201);
+    this.add.image(cx, cy, strokedRoundedTex(this, pw, ph, 22, 3)).setTint(0xffd678).setDepth(201);
+    this.add.text(cx, top + 46 * f, TITLE[result.outcome] ?? 'LEVEL CLEAR', { fontFamily: FONT, fontStyle: 'bold', fontSize: fs(30), color: '#ffe27a' }).setOrigin(0.5).setDepth(202);
 
-    let y = top + 84;
-    for (const ln of lines) { this.add.text(cx, y, ln, { fontFamily: FONT, fontSize: '17px', color: palette.accent, align: 'center' }).setOrigin(0.5).setDepth(202); y += 24; }
-    y += 6;
-    this.add.text(cx, y, 'TUTORIAL PROGRESS', { fontFamily: FONT, fontSize: '13px', color: '#7a737a' }).setOrigin(0.5).setDepth(202);
-    this.drawTracker(trackerRows, cx - 210, y + 16, 420, 202);
+    let y = top + 84 * f;
+    for (const ln of lines) { this.add.text(cx, y, ln, { fontFamily: FONT, fontSize: fs(17), color: palette.accent, align: 'center' }).setOrigin(0.5).setDepth(202); y += 24 * f; }
+    y += 6 * f;
+    this.add.text(cx, y, 'TUTORIAL PROGRESS', { fontFamily: FONT, fontSize: fs(13), color: '#7a737a' }).setOrigin(0.5).setDepth(202);
+    this.drawTracker(trackerRows, cx - (pw - 60) / 2, y + 16 * f, pw - 60, 202, trkRowH);
 
-    const by = top + ph - 64;
-    const b = makeButton(this, cx, by, 240, 50, isEnd ? 'To the menu' : 'Continue', () => this.advance(result), { fontSize: 20, fill: COLORS.accent, textColor: '#1c1a1e' });
+    const by = top + ph - 60 * f;
+    const b = makeButton(this, cx, by, Math.round(280 * f), Math.round(50 * f), isEnd ? 'To the menu' : 'Continue', () => this.advance(result), { fontSize: Math.round(20 * f), fill: COLORS.accent, textColor: '#1c1a1e' });
     b.root.setDepth(203);
   }
 

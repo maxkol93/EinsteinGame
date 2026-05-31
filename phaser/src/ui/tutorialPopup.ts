@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { COLORS, FONT, GAME, palette, rowColor, brighten } from '../config';
+import { COLORS, FONT, GAME, palette, rowColor, brighten, PORTRAIT } from '../config';
 import { symbolFor } from '../model/decoder';
 import { roundedTex, strokedRoundedTex } from './textures';
 import { makeButton, BtnHandle } from './button';
@@ -15,8 +15,10 @@ export interface PopupOpts {
   onDone?: () => void;
 }
 
-const PANEL_W = 600;
-const ANIM_H = 150;
+// bigger on mobile (the canvas is shrunk to phone width by Scale.FIT)
+const F = PORTRAIT ? 1.45 : 1;
+const PANEL_W = PORTRAIT ? GAME.width - 50 : 600;
+const ANIM_H = Math.round(150 * F);
 const DEMO_VALUES = [31, 32, 33]; // row 3 → A, B, C
 const SURVIVOR = 2;
 const ANIM_PERIOD = 3.6; // seconds
@@ -46,7 +48,8 @@ export class TutorialPopup {
 
     const lines = this.wrap(opts.text, PANEL_W - 80);
     const animH = opts.animation ? ANIM_H : 0;
-    const panelH = 64 + lines.length * 26 + animH + 28 + 56 + 30;
+    const lineH = Math.round(26 * F);
+    const panelH = Math.round(64 * F) + lines.length * lineH + animH + Math.round((28 + 56 + 30) * F);
     const cx = GAME.width / 2;
     const cy = GAME.height / 2;
 
@@ -66,14 +69,14 @@ export class TutorialPopup {
     const objs: Phaser.GameObjects.GameObject[] = [dim, this.spotG as Phaser.GameObjects.GameObject, panel, border].filter(Boolean);
 
     objs.push(
-      scene.add.text(cx, top + 32, (opts.tag ?? 'TUTORIAL'), { fontFamily: FONT, fontStyle: 'bold', fontSize: '14px', color: palette.accent })
+      scene.add.text(cx, top + 32 * F, (opts.tag ?? 'TUTORIAL'), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.round(14 * F)}px`, color: palette.accent })
         .setOrigin(0.5).setLetterSpacing(3).setDepth(203),
     );
 
-    let ty = top + 64;
+    let ty = top + 64 * F;
     for (const ln of lines) {
-      objs.push(scene.add.text(cx, ty, ln, { fontFamily: FONT, fontSize: '18px', color: palette.text }).setOrigin(0.5).setDepth(203));
-      ty += 26;
+      objs.push(scene.add.text(cx, ty, ln, { fontFamily: FONT, fontSize: `${Math.round(18 * F)}px`, color: palette.text }).setOrigin(0.5).setDepth(203));
+      ty += lineH;
     }
 
     if (opts.animation) {
@@ -84,9 +87,9 @@ export class TutorialPopup {
       ty += animH;
     }
 
-    const btnY = top + panelH - 30 - 28;
-    this.btn = makeButton(scene, cx, btnY, 200, 50, opts.buttonLabel ?? 'Got it', () => this.finish(), {
-      fontSize: 19, fill: COLORS.accent, textColor: '#1c1a1e',
+    const btnY = top + panelH - (30 + 28) * F;
+    this.btn = makeButton(scene, cx, btnY, Math.round(200 * F), Math.round(50 * F), opts.buttonLabel ?? 'Got it', () => this.finish(), {
+      fontSize: Math.round(19 * F), fill: COLORS.accent, textColor: '#1c1a1e',
     });
     this.btn.root.setDepth(204);
 
@@ -168,7 +171,7 @@ export class TutorialPopup {
   private drawDemo(): void {
     const g = this.demoG!;
     g.clear();
-    const rectSize = 100;
+    const rectSize = Math.round(100 * F);
     const slots = this.demoSlots(rectSize);
     // board backdrop + empty-cell ghost
     g.fillStyle(COLORS.bg, 1);
@@ -202,12 +205,13 @@ export class TutorialPopup {
   }
 
   private solved(g: Phaser.GameObjects.Graphics, value: number, scale: number, ti: number): number {
-    const w = 100 * scale;
+    const base = 100 * F;
+    const w = base * scale;
     g.fillStyle(rowColor(value), 1);
     g.fillRoundedRect(this.demoCx - w / 2, this.demoCy - w / 2, w, w, Math.max(4, w / 8));
     g.fillStyle(0xffffff, 0.14 * scale);
     g.fillRoundedRect(this.demoCx - w / 2, this.demoCy - w / 2, w, w * 0.4, Math.max(4, w / 8));
-    this.demoText(ti, symbolFor(value), this.demoCx, this.demoCy, Math.round(100 * 0.44), scale, 1);
+    this.demoText(ti, symbolFor(value), this.demoCx, this.demoCy, Math.round(base * 0.44), scale, 1);
     return ti + 1;
   }
 

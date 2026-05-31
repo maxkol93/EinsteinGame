@@ -16,17 +16,18 @@ export function makeSlider(
   x: number, y: number, w: number,
   label: string, value: number,
   onChange: (v: number) => void,
+  s = 1, // size scale (mobile/portrait bumps everything up)
 ): SliderHandle {
-  const trackY = 24;
-  const trackW = w - 52;
-  const trackH = 8;
-  const r = 8;
+  const trackY = 24 * s;
+  const trackW = w - 60 * s;
+  const trackH = 8 * s;
+  const r = 8 * s;
 
-  const labelT = scene.add.text(0, 0, label, { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0, 0);
-  const pctT = scene.add.text(w, 0, '', { fontFamily: FONT, fontSize: '14px', color: palette.text }).setOrigin(1, 0);
+  const labelT = scene.add.text(0, 0, label, { fontFamily: FONT, fontSize: `${Math.round(15 * s)}px`, color: palette.accent }).setOrigin(0, 0);
+  const pctT = scene.add.text(w, 0, '', { fontFamily: FONT, fontSize: `${Math.round(14 * s)}px`, color: palette.text }).setOrigin(1, 0);
 
   const g = scene.add.graphics();
-  const knob = scene.add.circle(0, trackY + trackH / 2, 9, COLORS.accent).setStrokeStyle(2, brighten(COLORS.accent, 40));
+  const knob = scene.add.circle(0, trackY + trackH / 2, 9 * s, COLORS.accent).setStrokeStyle(2, brighten(COLORS.accent, 40));
 
   let v = Math.max(0, Math.min(1, value));
 
@@ -41,7 +42,7 @@ export function makeSlider(
   };
 
   // a wide invisible hit strip over the track for easy grabbing
-  const hit = scene.add.rectangle(trackW / 2, trackY + trackH / 2, trackW + 24, 30, 0xffffff, 0).setInteractive({ useHandCursor: true });
+  const hit = scene.add.rectangle(trackW / 2, trackY + trackH / 2, trackW + 24, 40 * s, 0xffffff, 0).setInteractive({ useHandCursor: true });
   const setFromX = (worldX: number) => {
     // worldX (not pointer.x) so it works under the supersample camera zoom
     v = Math.max(0, Math.min(1, (worldX - root.x) / trackW));

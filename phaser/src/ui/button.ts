@@ -15,6 +15,7 @@ export interface BtnHandle {
   root: Phaser.GameObjects.Container;
   setSelected(on: boolean): void;
   setText(text: string): void;
+  setLocked(on: boolean): void;
 }
 
 /**
@@ -58,9 +59,12 @@ export function makeButton(
 
   const face = [bg, outline, label];
   let selected = !!opts.selected;
+  let locked = false; // a locked button still clicks (to show a notice) but
+                      // does NOT lift/brighten on hover
   const refreshOutline = () => outline.setAlpha(selected ? 0.9 : 0);
 
   bg.on('pointerover', () => {
+    if (locked) return;
     scene.tweens.killTweensOf(face);
     scene.tweens.add({ targets: face, y: -4, duration: 110, ease: 'Quad.easeOut' });
     scene.tweens.add({ targets: shadow, alpha: 0.72, duration: 110 });
@@ -69,6 +73,7 @@ export function makeButton(
     bg.setTint(brighten(fill, 42));
   });
   bg.on('pointerout', () => {
+    if (locked) return;
     scene.tweens.killTweensOf(face);
     scene.tweens.add({ targets: face, y: 0, duration: 110, ease: 'Quad.easeOut' });
     scene.tweens.add({ targets: shadow, alpha: 0, duration: 110 });
@@ -90,6 +95,15 @@ export function makeButton(
     },
     setText(t: string) {
       label.setText(t);
+    },
+    setLocked(on: boolean) {
+      locked = on;
+      if (on) { // settle back to rest in case it was mid-hover
+        scene.tweens.killTweensOf(face);
+        face.forEach((o) => (o as Phaser.GameObjects.Image).setY(0));
+        shadow.setAlpha(0);
+        bg.setTint(selected ? brighten(fill, 18) : fill);
+      }
     },
   };
 }

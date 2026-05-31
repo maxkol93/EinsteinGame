@@ -16,16 +16,17 @@ export function makeToggle(
   x: number, y: number, w: number,
   label: string, on: boolean,
   onChange: (on: boolean) => void,
+  s = 1, // size scale (mobile/portrait bumps everything up)
 ): ToggleHandle {
-  const h = 30;
-  const pillW = 46;
-  const pillH = 24;
+  const h = 30 * s;
+  const pillW = 46 * s;
+  const pillH = 24 * s;
   const pillX = w - pillW;
   const pillCY = h / 2;
 
-  const labelT = scene.add.text(0, h / 2, label, { fontFamily: FONT, fontSize: '15px', color: palette.text }).setOrigin(0, 0.5);
+  const labelT = scene.add.text(0, h / 2, label, { fontFamily: FONT, fontSize: `${Math.round(15 * s)}px`, color: palette.text }).setOrigin(0, 0.5);
   const g = scene.add.graphics();
-  const knob = scene.add.circle(0, pillCY, pillH / 2 - 3, 0xffffff);
+  const knob = scene.add.circle(0, pillCY, pillH / 2 - 3 * s, 0xffffff);
 
   let value = on;
   const redraw = () => {

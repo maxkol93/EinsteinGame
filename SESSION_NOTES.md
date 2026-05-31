@@ -1,6 +1,32 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-05-31**.
+Quick context for resuming work. Latest session: **2026-06-01**.
+
+## 2026-06-01 — Phaser: mobile sizing + hint/particle/lock-notice fixes
+
+1. **HINT button contrast** — explicit lighter fill so it doesn't sink into bg.
+2. **HINT disappears after use** — pressing it hides the button + restarts the
+   idle countdown (re-appears after another idle window); always up in Zen.
+3. **Portrait board fills the width** — margins 14→6, and the portrait canvas is
+   now **560×1180** (a near-phone aspect, so Scale.FIT barely letterboxes —
+   addresses the side "panel" slivers — and elements aren't shrunk to mush).
+4. **Pop dots much bigger** — `smallBurst` takes the tile size and scales the
+   filled dots to ~¼ of it (were ~1px).
+5. **Mobile menu much bigger** — re-laid out for the 560 canvas with big
+   buttons + scaled sliders/toggles (new `s` scale param on slider/toggle).
+6. **Mobile popups bigger** — block-select, the tutorial popup (text + demo
+   cell), the tutorial result overlay and the end panel all scale ~1.4–1.5× in
+   portrait.
+7. **Lock notice is a toast** — a gold-bordered rounded panel at the bottom that
+   pops + fades, instead of loose text over the buttons.
+8. **Locked mode buttons don't lift on hover** — `makeButton` gained `setLocked`
+   (no hover lift/brighten; still clicks to show the notice); `refreshLocks`
+   sets it.
+9. **Milestone thresholds** 5/10/20/50/100 → **3/5/10/20/50**.
+
+Verified: typecheck/build/smoke(270)/verify green; phone-viewport screenshots
+confirm the bigger menu/game/clues + fuller board, the lock toast, and the
+landscape options panel.
 
 ## 2026-05-31 — Phaser: 9 more fixes (hint button, particles, touch, progress, music)
 

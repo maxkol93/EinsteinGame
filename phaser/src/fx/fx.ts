@@ -139,12 +139,14 @@ export class Fx {
     this.scene.tweens.add({ targets: img, alpha: 0, duration: life, ease: 'Quad.easeIn', onComplete: () => img.destroy() });
   }
 
-  /** Candidate tile pop — the core juice: a spray of FILLED dots flying out
+  /** Candidate tile pop — the core juice: a spray of fat FILLED dots flying out
    *  from the cell centre, plus ONE subtle ring (pygame small_pop = a burst +
-   *  a single ring, not a stack of concentric circles). */
-  smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 14, speed: 330, size: 7, life: [380, 720], gravity: 300 });
-    this.ring(x, y, color, 30, 360, 3);
+   *  a single ring, not a stack of concentric circles). `cellPx` is the
+   *  candidate-tile size, so the dots scale to ~1/3 of the glyph on any board. */
+  smallBurst(x: number, y: number, color: number, cellPx = 44): void {
+    const size = Math.max(6, cellPx * 0.24); // fat, clearly visible dots
+    this.burst(x, y, color, { count: 13, speed: cellPx * 5, size, life: [380, 720], gravity: cellPx * 6 });
+    this.ring(x, y, color, cellPx * 0.7, 360, 3);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,
