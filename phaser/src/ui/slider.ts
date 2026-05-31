@@ -41,15 +41,16 @@ export function makeSlider(
   };
 
   // a wide invisible hit strip over the track for easy grabbing
-  const hit = scene.add.rectangle(trackW / 2, trackY + trackH / 2, trackW + 24, 28, 0xffffff, 0).setInteractive({ useHandCursor: true });
-  const setFromX = (localX: number) => {
-    v = Math.max(0, Math.min(1, localX / trackW));
+  const hit = scene.add.rectangle(trackW / 2, trackY + trackH / 2, trackW + 24, 30, 0xffffff, 0).setInteractive({ useHandCursor: true });
+  const setFromX = (worldX: number) => {
+    // worldX (not pointer.x) so it works under the supersample camera zoom
+    v = Math.max(0, Math.min(1, (worldX - root.x) / trackW));
     redraw();
     onChange(v);
   };
   let dragging = false;
-  hit.on('pointerdown', (p: Phaser.Input.Pointer) => { dragging = true; setFromX(p.x - root.x); });
-  scene.input.on('pointermove', (p: Phaser.Input.Pointer) => { if (dragging) setFromX(p.x - root.x); });
+  hit.on('pointerdown', (p: Phaser.Input.Pointer) => { dragging = true; setFromX(p.worldX); });
+  scene.input.on('pointermove', (p: Phaser.Input.Pointer) => { if (dragging) setFromX(p.worldX); });
   scene.input.on('pointerup', () => { dragging = false; });
 
   const root = scene.add.container(x, y, [labelT, pctT, g, knob, hit]);

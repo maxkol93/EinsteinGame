@@ -133,6 +133,12 @@ class AudioManager {
     return PICK_LADDER[Math.max(0, Math.min(step, PICK_LADDER.length - 1))];
   }
 
+  /** A RANDOM pick variant — used for a plain candidate pop so repeated pops
+   *  don't sound identical. (The cascade still uses the rising pickForStep.) */
+  randomPick(): void {
+    this.play(PICK_LADDER[Math.floor(Math.random() * PICK_LADDER.length)]);
+  }
+
   private cacheHas(key: string): boolean {
     return !!this.sound?.game.cache.audio.exists(key);
   }

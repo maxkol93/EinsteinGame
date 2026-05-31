@@ -64,7 +64,6 @@ export class MenuScene extends Phaser.Scene {
     } else {
       this.buildLeftColumn();
       this.buildOptionsPanel();
-      this.buildProgress();
     }
     this.refreshLocks();
   }
@@ -138,10 +137,6 @@ export class MenuScene extends Phaser.Scene {
     const half = (bw - 14) / 2;
     makeButton(this, cx - half / 2 - 7, y, half, 52, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 17 });
     makeButton(this, cx + half / 2 + 7, y, half, 52, '☆  Progress', () => openStatsOverlay(this), { fontSize: 17 });
-    y += 74;
-
-    const earned = new Set(stats.achievements);
-    this.add.text(cx, y, `Wins ${stats.totalWins}   ·   Best streak ${stats.bestStreak}   ·   Badges ${earned.size}/${ACHIEVEMENTS.length}`, { fontFamily: FONT, fontStyle: 'bold', fontSize: '16px', color: palette.text }).setOrigin(0.5);
   }
 
   private buildTitle(): void {
@@ -222,7 +217,7 @@ export class MenuScene extends Phaser.Scene {
     const px = PANEL_X;
     const py = 168;
     const pw = PANEL_W;
-    const ph = 408;
+    const ph = 436;
     this.add.image(px, py, roundedTex(this, pw, ph, 18)).setOrigin(0, 0).setTint(brighten(COLORS.bg, 11));
     this.add.image(px, py, strokedRoundedTex(this, pw, ph, 18, 2)).setOrigin(0, 0).setTint(brighten(COLORS.panel, 30));
     this.add.text(px + pw / 2, py + 24, 'O P T I O N S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(2);
@@ -243,40 +238,11 @@ export class MenuScene extends Phaser.Scene {
     makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; });
     y += 34;
     makeToggle(this, ix, y, iw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; });
-    y += 44;
+    y += 60;
 
     const half = (iw - 12) / 2;
-    makeButton(this, ix + half / 2, y, half, 44, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 16 });
-    makeButton(this, ix + half + 12 + half / 2, y, half, 44, '☆  Progress', () => openStatsOverlay(this), { fontSize: 16 });
-  }
-
-  // ---------------------- progress (bottom) ----------------------
-
-  private buildProgress(): void {
-    const cx = GAME.width / 2;
-    const earned = new Set(stats.achievements);
-    this.add
-      .text(cx, 626,
-        `Wins ${stats.totalWins}    ·    Best streak ${stats.bestStreak}    ·    Badges ${earned.size}/${ACHIEVEMENTS.length}`,
-        { fontFamily: FONT, fontStyle: 'bold', fontSize: '17px', color: palette.text })
-      .setOrigin(0.5);
-
-    const gap = 46;
-    const startX = cx - ((ACHIEVEMENTS.length - 1) * gap) / 2;
-    ACHIEVEMENTS.forEach((a, i) => {
-      const got = earned.has(a.id);
-      const star = this.add
-        .text(startX + i * gap, 672, got ? '★' : '☆', {
-          fontFamily: FONT, fontSize: '28px', color: got ? '#ffd678' : '#5b545b',
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      star.on('pointerover', () => {
-        const info = achievementInfo(a.id);
-        this.showBadgeTip(star.x, `${got ? info.name : '???'} — ${got ? info.desc : 'locked'}`);
-      });
-      star.on('pointerout', () => this.hideBadgeTip());
-    });
+    makeButton(this, ix + half / 2, y, half, 46, settings.tutorialDone ? '↺  Tutorial' : '▶  Tutorial', () => this.openBlockSelect(), { fontSize: 16 });
+    makeButton(this, ix + half + 12 + half / 2, y, half, 46, '☆  Progress', () => openStatsOverlay(this), { fontSize: 16 });
   }
 
   private showBadgeTip(x: number, text: string): void {

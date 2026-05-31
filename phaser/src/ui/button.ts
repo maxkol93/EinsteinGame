@@ -29,7 +29,8 @@ export function makeButton(
   text: string, onClick: () => void, opts: ButtonOpts = {},
 ): BtnHandle {
   const radius = opts.radius ?? 12;
-  const fill = opts.fill ?? COLORS.panel;
+  // default a touch lighter than the raw panel so buttons read against the bg
+  const fill = opts.fill ?? brighten(COLORS.panel, 16);
   // A soft drop shadow sitting under the button. On hover the face lifts and the
   // shadow deepens — the pygame buttons rise off the panel (buttons.soft_shadow)
   // rather than just brightening in place.

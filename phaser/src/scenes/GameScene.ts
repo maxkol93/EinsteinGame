@@ -125,6 +125,8 @@ export class GameScene extends Phaser.Scene {
   private hintActive: { restore: () => void } | null = null;
   private holdRing?: Phaser.GameObjects.Graphics;
   private holdTween?: Phaser.Tweens.Tween;
+  private idleHintMs: number | null = null;
+  private idleTimer?: Phaser.Time.TimerEvent;
 
   constructor() {
     super('game');
@@ -193,6 +195,11 @@ export class GameScene extends Phaser.Scene {
     this.buildClues();
     this.bindInput();
     this.startTimer();
+
+    // auto-hint after idle: 20s Easy, 40s Normal, never on Hard / Zen / seeded
+    // (mirrors pygame's per-difficulty idle-hint window)
+    this.idleHintMs = this.zen || this.seededKind ? null : [20000, 40000, null][this.difficulty];
+    this.resetIdle();
 
     audio.playMusic('game');
     audio.play('start');
@@ -704,6 +711,7 @@ export class GameScene extends Phaser.Scene {
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
     this.clearHint(); // any move dismisses the hint highlight
+    this.resetIdle(); // a move restarts the idle-hint countdown
     this.hoverEnd(); // drop any highlight before the board mutates
     const correct = this.board.isAnswer(y, x, n);
     if (isDefine ? !correct : correct) {
@@ -744,7 +752,7 @@ export class GameScene extends Phaser.Scene {
       audio.play('solve');
     } else if (cs.struck.length > 0) {
       // a plain pop that resolved nothing still answers the tap
-      audio.play('pick');
+      audio.randomPick();
     }
 
     if (cs.resolved.length >= 2) {
@@ -909,6 +917,16 @@ export class GameScene extends Phaser.Scene {
     this.hintActive = null;
   }
 
+  /** Restart the idle-hint countdown; when it elapses the hint auto-shows. */
+  private resetIdle(): void {
+    this.idleTimer?.remove();
+    this.idleTimer = undefined;
+    if (this.idleHintMs == null) return;
+    this.idleTimer = this.time.delayedCall(this.idleHintMs, () => {
+      if (!this.busy && !this.gameOver && !this.hintActive) this.hint();
+    });
+  }
+
   private hint(): void {
     if (this.busy || this.gameOver) return;
     this.clearHint();
@@ -932,10 +950,27 @@ export class GameScene extends Phaser.Scene {
     const clueGlows: Glowable[] = group ? group.minis.map((m) => this.clueGlow(m)) : [];
     for (const g of clueGlows) this.glow(g, true, false);
 
+    // a pulsing gold FRAME around the candidate's cell and (if any) the clue, on
+    // top of the outline — so the hint is unmistakable
+    const frame = this.add.graphics().setDepth(24);
+    const fr = chip.sub * 0.74;
+    const frameTween = this.tweens.addCounter({
+      from: 0.35, to: 1, duration: 560, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      onUpdate: (tw) => {
+        const a = tw.getValue() ?? 1;
+        frame.clear();
+        frame.lineStyle(3, 0xffd678, a);
+        frame.strokeRoundedRect(chip.cx - fr, chip.cy - fr, fr * 2, fr * 2, 8);
+        if (group) frame.strokeRoundedRect(group.gx - 7, group.gy - 7, RULE_CELL * 3 + 14, RULE_CELL + 14, 10);
+      },
+    });
+
     this.hintActive = {
       restore: () => {
         pulse.stop();
         pulseTxt.stop();
+        frameTween.stop();
+        frame.destroy();
         this.tweens.killTweensOf([chip.img, chip.txt, chip.outline]);
         if (chip.img.active) {
           chip.img.setScale(chip.base).setTint(rowColor(chip.value));
@@ -1252,6 +1287,8 @@ export class GameScene extends Phaser.Scene {
 
     this.add.rectangle(cx, cyPanel, GAME.width, GAME.height, 0x000000, 0.62).setDepth(100);
     this.add.image(cx, cyPanel, roundedTex(this, pw, ph, 18)).setTint(COLORS.panel).setDepth(101);
+    // gold border on a win, red on a loss (mirrors the pygame plaque)
+    this.add.image(cx, cyPanel, strokedRoundedTex(this, pw, ph, 18, 3)).setTint(won ? 0xffd678 : 0xe05a68).setDepth(101);
 
     let y = top + PAD;
 
@@ -1298,9 +1335,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     const btnY = y + 26 + 26;
-    const b1 = makeButton(this, cx - 120, btnY, 224, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, zen: this.zen }), { fontSize: 20, fill: COLORS.rows['4'], textColor: '#ffffff' });
-    const b2 = makeButton(this, cx + 120, btnY, 224, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true, zen: this.zen }), { fontSize: 20 });
-    const b3 = makeButton(this, cx, btnY + 52 / 2 + 14 + 48 / 2, 224, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
+    const bw = 200; // leaves a comfortable margin inside the 480px panel
+    const b1 = makeButton(this, cx - bw / 2 - 8, btnY, bw, 52, 'New board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, zen: this.zen }), { fontSize: 19, fill: COLORS.rows['4'], textColor: '#ffffff' });
+    const b2 = makeButton(this, cx + bw / 2 + 8, btnY, bw, 52, 'Retry this board', () => this.scene.restart({ size: this.size, difficulty: this.difficulty, seed: this.seed, retry: true, zen: this.zen }), { fontSize: 19 });
+    const b3 = makeButton(this, cx, btnY + 52 / 2 + 14 + 48 / 2, 280, 48, 'Menu', () => this.scene.start('menu', this.menuData()), { fontSize: 18 });
     [b1, b2, b3].forEach((b) => b.root.setDepth(102));
   }
 

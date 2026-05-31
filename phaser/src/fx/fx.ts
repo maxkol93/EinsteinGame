@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { brighten, FONT, GAME } from '../config';
-import { chunkTex, softDotTex, roundedTex } from '../ui/textures';
+import { chunkTex, dotTex, roundedTex } from '../ui/textures';
 
 interface BurstOpts {
   count?: number;
@@ -26,7 +26,7 @@ interface BurstOpts {
 export class Fx {
   private scene: Phaser.Scene;
   private chunk: string;
-  private soft: string;
+  private dot: string;
   private vignette: Phaser.GameObjects.Image;
   private vigHold = 0;
   private vigTween?: Phaser.Tweens.Tween | Phaser.Tweens.TweenChain;
@@ -39,7 +39,7 @@ export class Fx {
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.chunk = chunkTex(scene);
-    this.soft = softDotTex(scene);
+    this.dot = dotTex(scene);
     this.vignette = scene.add
       .image(GAME.width / 2, GAME.height / 2, this.vignetteTex())
       .setDisplaySize(GAME.width * 1.1, GAME.height * 1.16)
@@ -70,11 +70,10 @@ export class Fx {
     this.reduced = on;
   }
 
-  /** Outward spray — soft round MONOCHROME dots. One feathered circle texture,
-   *  one tint, a gentle gravity and a long ease-out fade: a clean, tactile puff
-   *  that lingers, instead of a multi-tone confetti of squares and white sparks.
-   *  Particle best-practice: ease size→0 and alpha→0 over a long lifespan, low
-   *  gravity so they drift and settle, no rotation noise. */
+  /** Outward spray — SOLID round MONOCHROME dots, brightened so they read
+   *  clearly on the dark board (the popping particles are the core juice). They
+   *  scatter, briefly grow (a little "pop"/pulse via Back.easeOut on scale),
+   *  then shrink + fade. One tint, no rotation/colour noise. */
   burst(x: number, y: number, color: number, opts: BurstOpts = {}): void {
     if (this.reduced) return;
     const count = opts.count ?? 14;
@@ -84,16 +83,18 @@ export class Fx {
     const grav = opts.gravity ?? 240; // softer than before so they float & settle
     const aMin = opts.angleMin ?? 0;
     const aMax = opts.angleMax ?? 360;
+    const tint = brighten(color, 48); // pop off the dark background
 
     const e = this.scene.add
-      .particles(x, y, this.soft, {
+      .particles(x, y, this.dot, {
         lifespan: { min: life[0], max: life[1] },
-        speed: { min: speed * 0.22, max: speed },
+        speed: { min: speed * 0.25, max: speed },
         angle: { min: aMin, max: aMax },
         gravityY: grav,
-        scale: { start: (size * 2.4) / 48, end: 0, ease: 'Quad.easeOut' }, // soft tex is 48px
-        alpha: { start: 0.95, end: 0, ease: 'Quad.easeIn' },
-        tint: color, // single tone — no per-particle colour variation
+        // grow with a slight overshoot (the "pulse"), then shrink to nothing
+        scale: { start: (size * 2.2) / 32, end: 0, ease: 'Back.easeOut' }, // dot tex is 32px
+        alpha: { start: 1, end: 0, ease: 'Quad.easeIn' },
+        tint,
         emitting: false,
       })
       .setDepth(60);
@@ -141,9 +142,9 @@ export class Fx {
   /** Candidate tile pop — small + snappy spark spray + ring. Held a touch
    *  longer so the pop is actually readable. */
   smallBurst(x: number, y: number, color: number): void {
-    this.burst(x, y, color, { count: 12, speed: 250, size: 6, life: [520, 980] });
-    this.ring(x, y, color, 44, 560, 5);
-    this.ring(x, y, 0xffffff, 28, 380, 3);
+    this.burst(x, y, color, { count: 16, speed: 290, size: 7, life: [520, 980] });
+    this.ring(x, y, color, 44, 560, 6);
+    this.ring(x, y, 0xffffff, 26, 360, 2);
   }
 
   /** Resolved big cell — the headline pop: spray, rings, white wave, bloom,

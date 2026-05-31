@@ -546,12 +546,12 @@ export class TutorialScene extends Phaser.Scene {
     // block 0 gesture gating: the un-taught gesture is a silent no-op nudge —
     // but on a hold-only level, a few taps earn a "hold the button" reminder.
     if (lv.block === 0 && !isDefine && !lv.tapOk) {
-      this.wrongFeedback(y, x, n, false);
+      this.wrongFeedback(y, x, n, true);
       this.misuseTaps += 1;
       if (this.misuseTaps === 6) this.openPopup({ text: GESTURE_HOLD_TEXT, buttonLabel: 'Got it', tag: 'TIP', animation: 'hold_to_define' });
       return;
     }
-    if (lv.block === 0 && isDefine && !lv.holdOk) { this.wrongFeedback(y, x, n, false); return; }
+    if (lv.block === 0 && isDefine && !lv.holdOk) { this.wrongFeedback(y, x, n, true); return; }
 
     if (!lv.free) {
       const correct = lv.solution[y][x] === n;
@@ -582,7 +582,7 @@ export class TutorialScene extends Phaser.Scene {
       this.time.delayedCall(delay, () => { this.renderBig(r.y, r.x, r.n, true); audio.play(key); });
     }
     if (cs.resolved.length > 0) audio.play('solve');
-    else if (cs.struck.length > 0) audio.play('pick');
+    else if (cs.struck.length > 0) audio.randomPick();
     if (cs.resolved.length >= 2) {
       const f = cs.resolved[0];
       const { cx, cy } = this.cellCenter(f.y, f.x);

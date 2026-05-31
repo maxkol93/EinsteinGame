@@ -2,6 +2,37 @@
 
 Quick context for resuming work. Latest session: **2026-05-31**.
 
+## 2026-05-31 — Phaser: 14 fixes (sliders, hints, particles, panels, stats)
+
+1. **Tutorial entry error sound** — a wrong gesture on a block-0 gated level now
+   plays `wrong` (was silent).
+2. **Volume sliders fixed** — used `pointer.x` (screen) under the supersample
+   camera → snapped to 100%. Now `pointer.worldX`; drag works.
+3. **Random pop sound** — a plain candidate pop plays `audio.randomPick()`; the
+   cascade still uses the rising `pickForStep`.
+4. **Auto idle-hints per difficulty** — 20s Easy, 40s Normal, never on Hard /
+   Zen / seeded; reset on every move.
+5. **Hint frame** — a pulsing gold rounded-rect boxes the hinted cell AND its
+   clue, on top of the outline.
+6. **Reduce motion** — already worked (suppresses bursts/shake/confetti/
+   vignette); the "broken" feeling was the invisible particles (#14).
+7. **Options panel spacing** — Tutorial/Progress buttons no longer overlap.
+8. **Milestone stars** in Progress: spread out + column headers labelled with
+   the win thresholds (★ at wins: 5 10 20 50 100).
+9. **Achievements** in Progress: coloured circles (✓/?) with a hover tooltip,
+   not stars (stars are the milestone markers).
+10. **Menu** drops the bottom wins/streak/badge row (it lives in Progress now).
+11. **End panel border** — gold on a win, red on a loss.
+12. **End panel buttons** — narrower with margins (no longer edge-to-edge).
+13. **Button contrast** — default fill brightened so buttons read against the bg.
+14. **Pop particles visible** — were feathered low-contrast dots; now SOLID,
+    brightened, bigger circles that scatter + pop.
+
+Verified: typecheck/build clean, `verify` green; probes confirmed slider drag
+changes volume, reduce-motion → 0 emitters (on) / 1 (off), idle-hint=20000 on
+Easy; screenshots confirm the menu, the gold/red end panel, and the Progress
+screen (labelled milestones + circular badges).
+
 ## 2026-05-31 — Phaser: full menu options + daily/weekly/monthly + progress + lose fix
 
 - **Lose sound** — `play('lose')` fired but landed on the same frame as the
