@@ -13,7 +13,7 @@ import {
   TutorialDirector, TutorialLevel, CompleteResult, TrackerRow, levelsInBlock,
   GOAL_HINT, GESTURE_HOLD_TEXT,
 } from '../model/tutorial';
-import { TutorialPopup, TutorialAnim } from '../ui/tutorialPopup';
+import { TutorialPopup, TutorialAnim, WelcomePopup } from '../ui/tutorialPopup';
 
 // Layout mirrors the landscape game (a left panel, the board, a right clue
 // panel) but the board is a big 3x3 and the left panel is the block tracker.
@@ -68,7 +68,7 @@ export class TutorialScene extends Phaser.Scene {
   private longPress?: Phaser.Time.TimerEvent;
   private holdRing?: Phaser.GameObjects.Graphics;
   private holdTween?: Phaser.Tweens.Tween;
-  private popup?: TutorialPopup;
+  private popup?: TutorialPopup | WelcomePopup;
 
   // cross-highlight hover state
   private hoverChip: Chip | null = null;
@@ -332,12 +332,26 @@ export class TutorialScene extends Phaser.Scene {
       g.img.setTint(g.tintHi);
       if (g.outline) g.outline.setAlpha(0.7);
       this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
-      if (hop && g.canHop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+      if (hop && g.canHop) {
+        g.img.setDepth(15);
+        if (g.outline) g.outline.setDepth(16);
+        if (g.txt) g.txt.setDepth(17);
+        this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+      }
     } else {
       g.img.setTint(g.tintBase);
       if (g.outline) this.tweens.add({ targets: g.outline, alpha: 0, duration: 120 });
       this.tweens.add({ targets: scalers, scaleX: g.scale, scaleY: g.scale, duration: 120 });
-      this.tweens.add({ targets: movers, y: g.homeY, duration: 120 });
+      this.tweens.add({
+        targets: movers, y: g.homeY, duration: 120,
+        onComplete: () => {
+          if (g.canHop && g.img.active && g.img.depth < 20) {
+            g.img.setDepth(5);
+            if (g.outline) g.outline.setDepth(6);
+            if (g.txt) g.txt.setDepth(7);
+          }
+        },
+      });
     }
   }
 
@@ -707,15 +721,29 @@ export class TutorialScene extends Phaser.Scene {
   private showIntro(): void {
     const intro = this.dir.introText();
     if (intro) {
-      const anim: TutorialAnim | undefined = this.dir.block === 0 ? 'pop_to_solve' : undefined;
+      if (this.dir.block === 0) {
+        // Welcome intro screen first, then the block intro with animation.
+        this.openWelcomePopup(() => {
+          this.openPopup({ text: intro, buttonLabel: "Let's play!", tag: 'TUTORIAL', animation: 'pop_to_solve' });
+        });
+        return;
+      }
       const spotlight = this.dir.block === 1 && this.clueGroups.length
         ? { x: CLUE_X + 8, y: 100, w: PANEL - 16, h: 60 + this.level.clues.length * (RULE_CELL + 22) }
         : undefined;
-      this.openPopup({ text: intro, buttonLabel: this.dir.block === 0 ? "Let's play!" : 'Got it', tag: 'TUTORIAL', animation: anim, spotlight });
+      this.openPopup({ text: intro, buttonLabel: 'Got it', tag: 'TUTORIAL', spotlight });
       return;
     }
     const note = this.dir.gestureIntro();
     if (note) this.openPopup({ text: note, buttonLabel: 'Got it', tag: 'TIP', animation: 'hold_to_define' });
+  }
+
+  private openWelcomePopup(onNext: () => void): void {
+    this.popup?.destroy();
+    this.popup = new WelcomePopup(this, () => {
+      this.popup = undefined;
+      onNext();
+    });
   }
 
   private openPopup(opts: { text: string; buttonLabel?: string; tag?: string; animation?: TutorialAnim; spotlight?: { x: number; y: number; w: number; h: number } }): void {
@@ -779,8 +807,14 @@ export class TutorialScene extends Phaser.Scene {
   }
 
   private toMenu(): void {
-    // keep the director in the registry so progress isn't lost
-    this.scene.start('menu');
+    // Pause the tutorial (keeps director in registry) and open the menu as an
+    // overlay — so Continue in the menu brings the player back here.
+    this.hoverEnd();
+    this.popup?.destroy();
+    this.popup = undefined;
+    this.scene.pause();
+    this.scene.launch('menu');
+    this.scene.bringToTop('menu');
   }
 
   private skip(): void {

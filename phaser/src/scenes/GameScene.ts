@@ -506,12 +506,28 @@ export class GameScene extends Phaser.Scene {
       g.img.setTint(g.tintHi);
       if (g.outline) g.outline.setAlpha(0.7);
       this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
-      if (hop && g.canHop) this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+      if (hop && g.canHop) {
+        // Raise depth so hopping chips always render above their neighbours.
+        g.img.setDepth(15);
+        if (g.outline) g.outline.setDepth(16);
+        if (g.txt) g.txt.setDepth(17);
+        this.tweens.add({ targets: movers, y: g.homeY - 9, duration: 170, yoyo: true, ease: 'Quad.easeOut' });
+      }
     } else {
       g.img.setTint(g.tintBase);
       if (g.outline) this.tweens.add({ targets: g.outline, alpha: 0, duration: 120 });
       this.tweens.add({ targets: scalers, scaleX: g.scale, scaleY: g.scale, duration: 120 });
-      this.tweens.add({ targets: movers, y: g.homeY, duration: 120 });
+      this.tweens.add({
+        targets: movers, y: g.homeY, duration: 120,
+        onComplete: () => {
+          // Restore base depth (skip directly-lifted chips at depth 20+).
+          if (g.canHop && g.img.active && g.img.depth < 20) {
+            g.img.setDepth(5);
+            if (g.outline) g.outline.setDepth(6);
+            if (g.txt) g.txt.setDepth(7);
+          }
+        },
+      });
     }
   }
 
@@ -920,16 +936,23 @@ export class GameScene extends Phaser.Scene {
       for (const x of cCols) if (x <= minC && x <= Math.min(...aCols)) { const btn = this.candidateButton(Math.floor(c / 10) - 1, x, c); if (btn) return { chip: btn, group, reason: `${sym(c)} must be right of ${sym(a)} (clue …), but there's no room for ${sym(a)} further left — so ${sym(c)} can't be here.` }; }
       return null;
     }
-    // triple — lean on the known answer: ring an active candidate the solution
-    // rules out, with the triple clue as the reason.
+    // triple — only suggest a candidate that the deductive solver can actually
+    // eliminate from the current board state (avoids hinting a random "safe" pop
+    // that the triple clue doesn't logically justify right now).
     if (typeof a === 'number' && typeof b === 'number' && typeof c === 'number') {
+      const validPops = new Set(
+        this.model.hintPops(this.board.cells).map((p) => `${p.y}:${p.x}:${p.n}`),
+      );
       for (const v of [a, b, c]) {
         const y = Math.floor(v / 10) - 1;
         for (let x = 0; x < this.size; x++) {
           const btn = this.candidateButton(y, x, v);
-          if (btn && this.board.solution[y][x] !== v) return { chip: btn, group, reason: `${sym(v)} here would break the clue ${sym(a)} ${sym(b)} ${sym(c)} — it can't be the answer for this cell.` };
+          if (btn && this.board.solution[y][x] !== v && validPops.has(`${y}:${x}:${v}`)) {
+            return { chip: btn, group, reason: `${sym(v)} here would break the clue ${sym(a)} ${sym(b)} ${sym(c)} — it can't be the answer for this cell.` };
+          }
         }
       }
+      return null;
     }
     return null;
   }

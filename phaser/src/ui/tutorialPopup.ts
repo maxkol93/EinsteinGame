@@ -326,3 +326,180 @@ export class TutorialPopup {
     return lines;
   }
 }
+
+// ---- Welcome intro popup -----------------------------------------------
+
+/**
+ * The very first popup the player sees: "Welcome to Einstein!" + two mini-board
+ * illustrations (partial → complete) + "Next →" button that opens the regular
+ * block-0 intro popup.
+ */
+export class WelcomePopup {
+  private scene: Phaser.Scene;
+  private root: Phaser.GameObjects.Container;
+  private btn!: BtnHandle;
+
+  constructor(scene: Phaser.Scene, onNext: () => void) {
+    this.scene = scene;
+
+    const cx = GAME.width / 2;
+    const cy = GAME.height / 2;
+
+    const CELL = Math.round(36 * F);
+    const CGAP = 3;
+    const BOARD_W = 3 * CELL + 2 * CGAP;
+    const BOARD_H = BOARD_W;
+    const ARROW_W = Math.round(46 * F);
+
+    const title = 'Welcome to Einstein!';
+    const body = 'You need to guess all the cells in the field.';
+
+    const probe = scene.add.text(0, 0, '', { fontFamily: FONT, fontSize: `${Math.round(18 * F)}px` }).setVisible(false);
+    const bodyLines = wrapText(probe, body, PANEL_W - 80);
+    probe.destroy();
+
+    const lineH = Math.round(26 * F);
+    const boardAreaH = BOARD_H + Math.round(12 * F);
+    const panelH = Math.round(64 * F)           // top padding + tag
+      + Math.round(36 * F)                       // title line
+      + bodyLines.length * lineH                 // body text
+      + Math.round(20 * F)                       // gap before boards
+      + boardAreaH                               // board illustrations
+      + Math.round((28 + 56 + 30) * F);          // button area
+
+    const top = cy - panelH / 2;
+
+    const dim = scene.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.62).setDepth(200);
+    dim.setInteractive();
+    const panel = scene.add.image(cx, cy, roundedTex(scene, PANEL_W, panelH, 22))
+      .setTint(brighten(COLORS.panel, 6)).setDepth(202);
+    const border = scene.add.image(cx, cy, strokedRoundedTex(scene, PANEL_W, panelH, 22, 3))
+      .setTint(brighten(COLORS.panel, 40)).setDepth(202);
+
+    const objs: Phaser.GameObjects.GameObject[] = [dim, panel, border];
+
+    // Tag
+    objs.push(scene.add.text(cx, top + 32 * F, 'TUTORIAL', {
+      fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.round(14 * F)}px`, color: palette.accent,
+    }).setOrigin(0.5).setLetterSpacing(3).setDepth(203));
+
+    // Title (slightly larger than body)
+    objs.push(scene.add.text(cx, top + 64 * F, title, {
+      fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.round(22 * F)}px`, color: palette.text,
+    }).setOrigin(0.5).setDepth(203));
+
+    // Body text
+    let ty = top + 64 * F + 36 * F;
+    for (const ln of bodyLines) {
+      objs.push(scene.add.text(cx, ty, ln, {
+        fontFamily: FONT, fontSize: `${Math.round(18 * F)}px`, color: palette.text,
+      }).setOrigin(0.5).setDepth(203));
+      ty += lineH;
+    }
+
+    // Board illustrations
+    ty += Math.round(20 * F);
+    const boardMidY = ty + BOARD_H / 2;
+    const totalBoardW = BOARD_W + ARROW_W + BOARD_W;
+    const partialX = cx - totalBoardW / 2;
+    const completeX = cx + totalBoardW / 2 - BOARD_W;
+
+    const boardG = scene.add.graphics().setDepth(203);
+    objs.push(boardG);
+    drawPartialBoard(boardG, partialX, ty, CELL, CGAP);
+    drawCompleteBoard(boardG, completeX, ty, CELL, CGAP);
+
+    objs.push(scene.add.text(cx, boardMidY, '→', {
+      fontFamily: FONT, fontSize: `${Math.round(30 * F)}px`, color: palette.accent,
+    }).setOrigin(0.5).setDepth(203));
+
+    // Next button
+    const btnY = top + panelH - (30 + 28) * F;
+    this.btn = makeButton(scene, cx, btnY,
+      Math.round(200 * F), Math.round(50 * F), 'Next  →', () => {
+        onNext();
+        this.destroy();
+      }, { fontSize: Math.round(19 * F), fill: COLORS.accent, textColor: '#1c1a1e' });
+    this.btn.root.setDepth(204);
+
+    this.root = scene.add.container(0, 0, objs);
+    this.root.setDepth(200);
+  }
+
+  destroy(): void {
+    this.btn.root.destroy();
+    this.root.destroy();
+  }
+}
+
+// ---- shared mini-board drawing helpers (used by WelcomePopup) ----------
+
+function wrapText(probe: Phaser.GameObjects.Text, text: string, maxW: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const test = cur ? `${cur} ${w}` : w;
+    probe.setText(test);
+    if (probe.width > maxW && cur) { lines.push(cur); cur = w; } else cur = test;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+/** Draw a partial (half-solved) 3×3 board: a mix of multi-candidate cells and solved cells. */
+function drawPartialBoard(g: Phaser.GameObjects.Graphics, ox: number, oy: number, cell: number, gap: number): void {
+  // Cells (row, col) that are already solved → value shown as a big tile.
+  const solvedCells = new Map<number, number>([[1 * 3 + 0, 21], [2 * 3 + 2, 33]]);
+  const rad = Math.max(3, Math.round(cell / 8));
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const px = ox + col * (cell + gap);
+      const py = oy + row * (cell + gap);
+      // Ghost plate
+      g.fillStyle(brighten(COLORS.bg, 14), 1);
+      g.fillRoundedRect(px, py, cell, cell, rad);
+
+      const key = row * 3 + col;
+      if (solvedCells.has(key)) {
+        const v = solvedCells.get(key)!;
+        const color = rowColor(v);
+        g.fillStyle(color, 1);
+        g.fillRoundedRect(px, py, cell, cell, rad);
+        g.fillStyle(0xffffff, 0.14);
+        g.fillRoundedRect(px, py, cell, cell * 0.38, rad);
+      } else {
+        // Draw 3 small candidate chips in a 2-1 layout
+        const sz = Math.floor(cell * 0.42);
+        const chipGap = Math.floor(cell * 0.08);
+        const inset = Math.floor((cell - sz * 2 - chipGap) / 2);
+        const chipRad = Math.max(2, Math.round(sz / 5));
+        const slotColors = [rowColor((row + 1) * 10 + 1), rowColor((row + 1) * 10 + 2), rowColor((row + 1) * 10 + 3)];
+        const slots = [{ dx: 0, dy: 0 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }];
+        for (let k = 0; k < 3; k++) {
+          const sx = px + inset + slots[k].dx * (sz + chipGap);
+          const sy = py + inset + slots[k].dy * (sz + chipGap);
+          g.fillStyle(slotColors[k], 1);
+          g.fillRoundedRect(sx, sy, sz, sz, chipRad);
+        }
+      }
+    }
+  }
+}
+
+/** Draw a fully-solved 3×3 board: every cell shows a big coloured tile. */
+function drawCompleteBoard(g: Phaser.GameObjects.Graphics, ox: number, oy: number, cell: number, gap: number): void {
+  const grid = [[11, 12, 13], [23, 21, 22], [32, 33, 31]];
+  const rad = Math.max(3, Math.round(cell / 8));
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const px = ox + col * (cell + gap);
+      const py = oy + row * (cell + gap);
+      const color = rowColor(grid[row][col]);
+      g.fillStyle(color, 1);
+      g.fillRoundedRect(px, py, cell, cell, rad);
+      g.fillStyle(0xffffff, 0.14);
+      g.fillRoundedRect(px, py, cell, cell * 0.38, rad);
+    }
+  }
+}

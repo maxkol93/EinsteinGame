@@ -29,6 +29,15 @@ const MENU_LOOP = 'menu_loop';
 const GAME_LOOPS = ['game_loop_1', 'game_loop_2', 'game_loop_3'];
 type MusicContext = 'menu' | 'game';
 
+// Per-track gain to equalise perceived loudness across loops.
+// game_loop_3 is the ambient/quieter recording — boost it to match the others.
+const MUSIC_TRACK_GAIN: Record<string, number> = {
+  menu_loop: 1.0,
+  game_loop_1: 0.85,
+  game_loop_2: 1.0,
+  game_loop_3: 1.5,
+};
+
 // Per-sound trim so one master volume stays musically balanced (mirrors
 // _SOUND_GAIN): subtle UI ticks, prominent game events.
 const GAIN: Record<string, number> = {
@@ -65,9 +74,10 @@ class AudioManager {
   private clock = 0;
 
   private volume = 0.7;
-  private musicVolume = 0.5;
+  private musicVolume = 0.1;
   private sfxOn = true;
   private musicOn = true;
+  private currentTrackGain = 1.0;
 
   /** Bind to the game's global sound manager and add every loaded sound. Safe
    *  to call once after the loader (BootScene) has the bank in the cache. */
@@ -159,7 +169,8 @@ class AudioManager {
     const key = context === 'menu' ? MENU_LOOP : GAME_LOOPS[Math.floor(Math.random() * GAME_LOOPS.length)];
     if (!this.cacheHas(key)) return;
     this.currentKey = key;
-    this.music = this.sound.add(key, { loop: true, volume: this.musicVolume });
+    this.currentTrackGain = MUSIC_TRACK_GAIN[key] ?? 1.0;
+    this.music = this.sound.add(key, { loop: true, volume: this.musicVolume * this.currentTrackGain });
     this.music.play();
   }
 
@@ -187,7 +198,7 @@ class AudioManager {
   setMusicVolume(v: number): void {
     this.musicVolume = clamp01(v);
     if (this.music) {
-      (this.music as Phaser.Sound.WebAudioSound).setVolume(this.musicVolume);
+      (this.music as Phaser.Sound.WebAudioSound).setVolume(this.musicVolume * this.currentTrackGain);
       // raising from 0 must always bring the bed back — if WebAudio culled the
       // silent loop (it can), re-assert playback
       if (this.musicVolume > 0 && this.musicOn && !this.music.isPlaying) this.music.play();

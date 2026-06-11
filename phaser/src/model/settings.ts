@@ -4,6 +4,8 @@
  * far). Audio settings live separately in src/audio/sound.ts.
  */
 
+import { PORTRAIT } from '../config';
+
 const STORE_KEY = 'einsteingame_settings';
 
 interface SettingsData {
@@ -27,7 +29,7 @@ interface SettingsData {
 
 const DEFAULTS: SettingsData = {
   unlock_all: false, zen: false, tutorial_blocks: 0,
-  tooltips: true, touch: false, reduce_motion: false,
+  tooltips: true, touch: PORTRAIT, reduce_motion: false,
 };
 
 class Settings {

@@ -47,9 +47,9 @@ export class MenuScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor(COLORS.bg);
 
     // Standalone menu plays the menu bed; but when this menu is the pause
-    // overlay over a still-paused game, keep that game's loop playing so
-    // Continue resumes seamlessly (resume doesn't re-run the game's create).
-    if (!this.scene.isPaused('game')) audio.playMusic('menu');
+    // overlay over a still-paused game or tutorial, keep that loop playing so
+    // Continue resumes seamlessly (resume doesn't re-run the scene's create).
+    if (!this.scene.isPaused('game') && !this.scene.isPaused('tutorial')) audio.playMusic('menu');
 
     // U toggles the debug unlock-all (mirrors pressing U in the pygame build).
     this.input.keyboard?.on('keydown-U', () => {
@@ -108,9 +108,11 @@ export class MenuScene extends Phaser.Scene {
       });
     });
 
-    if (this.scene.isPaused('game')) {
+    if (this.scene.isPaused('game') || this.scene.isPaused('tutorial')) {
       push(66, 24, (cy) => makeButton(this, cx, cy, bw, 66, '▶  CONTINUE', () => this.continueGame(), { fontSize: 27, fill: COLORS.rows['4'], textColor: '#ffffff' }));
-      push(50, 18, (cy) => makeButton(this, cx, cy, bw, 50, 'New game', () => this.play(), { fontSize: 20 }));
+      if (this.scene.isPaused('game')) {
+        push(50, 18, (cy) => makeButton(this, cx, cy, bw, 50, 'New game', () => this.play(), { fontSize: 20 }));
+      }
     } else {
       push(80, 24, (cy) => makeButton(this, cx, cy, bw, 80, 'PLAY', () => this.play(), { fontSize: 34, fill: COLORS.rows['4'], textColor: '#ffffff' }));
     }
@@ -182,10 +184,12 @@ export class MenuScene extends Phaser.Scene {
       return b;
     });
 
-    // Continue + New game when a board is paused, else Play.
-    if (this.scene.isPaused('game')) {
+    // Continue (+ New game for a paused game) when a board/tutorial is paused, else Play.
+    if (this.scene.isPaused('game') || this.scene.isPaused('tutorial')) {
       makeButton(this, cx, 376, 380, 52, '▶  CONTINUE', () => this.continueGame(), { fontSize: 22, fill: COLORS.rows['4'], textColor: '#ffffff' });
-      makeButton(this, cx, 422, 380, 40, 'New game', () => this.play(), { fontSize: 17 });
+      if (this.scene.isPaused('game')) {
+        makeButton(this, cx, 422, 380, 40, 'New game', () => this.play(), { fontSize: 17 });
+      }
     } else {
       makeButton(this, cx, 392, 380, 60, 'PLAY', () => this.play(), { fontSize: 26, fill: COLORS.rows['4'], textColor: '#ffffff' });
     }
@@ -323,9 +327,13 @@ export class MenuScene extends Phaser.Scene {
     this.scene.start('game', { size: this.size, difficulty: this.difficulty, zen: settings.zen });
   }
 
-  /** Resume the paused in-progress board. */
+  /** Resume the paused in-progress board or tutorial. */
   private continueGame(): void {
-    this.scene.resume('game');
+    if (this.scene.isPaused('game')) {
+      this.scene.resume('game');
+    } else {
+      this.scene.resume('tutorial');
+    }
     this.scene.stop();
   }
 
