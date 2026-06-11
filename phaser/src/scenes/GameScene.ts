@@ -1482,21 +1482,33 @@ export class GameScene extends Phaser.Scene {
       ctx.arc(W / 2 - dotsW / 2 + i * dotGap, 158, dotR, 0, Math.PI * 2); ctx.fill();
     });
 
-    const doSend = (blob: Blob) => {
-      // Prefer image copy; fall back to plain-text so button always works.
-      const sendImg = async (): Promise<boolean> => {
-        if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) return false;
-        try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); return true; } catch { return false; }
-      };
-      sendImg().then((ok) => {
-        if (ok) { onCopied(); return; }
-        const txt = `Einstein — ${this.getShareTag()}\n${timeStr}`;
-        navigator.clipboard?.writeText(txt).then(onCopied).catch(() => {});
-      });
-    };
+    const txt = `Einstein — ${this.getShareTag()}\n${timeStr}`;
 
+    // execCommand is synchronous and works inside iframes (no Permissions Policy).
+    // Call it NOW while still inside the button's gesture context.
+    let execOk = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      Object.assign(ta.style, { position: 'fixed', top: '-9999px', opacity: '0' });
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      execOk = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch { /* */ }
+    if (execOk) onCopied();
+
+    // Async: try to upgrade to image (overwrites clipboard with the card).
+    // In standalone Chrome this replaces the text; in iframe it fails silently.
     document.fonts.ready.then(() => {
-      canvas.toBlob((blob) => { if (blob) doSend(blob); }, 'image/png');
+      canvas.toBlob(async (blob) => {
+        if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+          try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); } catch { /* blocked in iframe */ }
+        }
+        // If execCommand also failed (some edge cases), try async text as last resort.
+        if (!execOk) {
+          try { await navigator.clipboard?.writeText(txt); onCopied(); } catch { /* nothing we can do */ }
+        }
+      }, 'image/png');
     });
   }
 
