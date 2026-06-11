@@ -378,4 +378,58 @@ export class SelfWalkthrough {
       }
     }
   }
+
+  /** Initialize from a live player board and find which candidates the
+   *  deductive rules eliminate — the correct set of "safe pops" for hints. */
+  findHintPops(
+    cells: ReadonlyArray<ReadonlyArray<{ readonly value: number | null; readonly candidates: ReadonlyArray<number> }>>,
+  ): Array<{ y: number; x: number; n: number }> {
+    this.won = false;
+    this.undefinedCount = 0;
+    this.field = [];
+
+    // Snapshot current candidates before running the solver
+    const before: Array<Array<Set<number>>> = [];
+    for (let y = 0; y < this.size; y++) {
+      this.field.push([]);
+      before.push([]);
+      for (let x = 0; x < this.size; x++) {
+        const cell = cells[y][x];
+        if (cell.value !== null) {
+          this.field[y].push(cell.value);
+          before[y].push(new Set<number>());
+        } else {
+          const cands = [...cell.candidates];
+          this.field[y].push(cands);
+          before[y].push(new Set<number>(cands));
+          this.undefinedCount += 1;
+        }
+      }
+    }
+
+    // Run deduction steps
+    this.countIter = 0;
+    while (!this.won && this.countIter < this.iterLimit) {
+      this.simpleIter();
+      this.countIter += 1;
+      if (this.undefinedCount === 0) this.won = true;
+    }
+
+    // Return any candidate that the solver eliminated but is still on the board
+    const pops: Array<{ y: number; x: number; n: number }> = [];
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const prev = before[y][x];
+        if (prev.size === 0) continue;
+        const now = this.field[y][x];
+        const nowSet: Set<number> = Array.isArray(now)
+          ? new Set(now as number[])
+          : new Set([now as number]);
+        for (const n of prev) {
+          if (!nowSet.has(n)) pops.push({ y, x, n });
+        }
+      }
+    }
+    return pops;
+  }
 }

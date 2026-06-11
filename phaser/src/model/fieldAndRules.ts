@@ -55,6 +55,13 @@ export class FieldAndRules {
     return this.rules.slice(this.definedStartCellsCount);
   }
 
+  /** Find candidates the solver can eliminate from the current player board — for HINT. */
+  hintPops(
+    cells: ReadonlyArray<ReadonlyArray<{ readonly value: number | null; readonly candidates: ReadonlyArray<number> }>>,
+  ): Array<{ y: number; x: number; n: number }> {
+    return new SelfWalkthrough(this.rules, this.size).findHintPops(cells);
+  }
+
   private generateFinalField(): number[][] {
     const data: number[][] = [];
     for (let y = 0; y < this.size; y++) {
