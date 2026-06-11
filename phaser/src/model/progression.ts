@@ -15,7 +15,7 @@ export const UNLOCK_THRESHOLD = 3;
 export function sizeUnlocked(stats: Stats, difficulty: number, size: number, unlockAll: boolean): boolean {
   if (unlockAll) return true;
   if (size === 4) return true;
-  const prev = size === 6 ? 5 : 4;
+  const prev = size - 1;
   return stats.winsFor(difficulty, prev) >= UNLOCK_THRESHOLD;
 }
 

@@ -8,6 +8,7 @@ export const COMPLEXITY: Record<number, [number, number, number]> = {
   4: [9, 4, 0],
   5: [14, 7, 0],
   6: [20, 10, 0],
+  7: [28, 14, 0],
 };
 
 const MAX_RULE_ADDS = 600;
@@ -55,11 +56,14 @@ export class FieldAndRules {
     return this.rules.slice(this.definedStartCellsCount);
   }
 
-  /** Find candidates the solver can eliminate from the current player board — for HINT. */
+  /** Find candidates the solver can eliminate from the current player board — for HINT.
+   *  Pass `rules` to restrict the solver to a specific subset (e.g. one clue for
+   *  triple-rule hints, so eliminations are only attributed to that clue). */
   hintPops(
     cells: ReadonlyArray<ReadonlyArray<{ readonly value: number | null; readonly candidates: ReadonlyArray<number> }>>,
+    rules?: Rule[],
   ): Array<{ y: number; x: number; n: number }> {
-    return new SelfWalkthrough(this.rules, this.size).findHintPops(cells);
+    return new SelfWalkthrough(rules ?? this.rules, this.size).findHintPops(cells);
   }
 
   private generateFinalField(): number[][] {

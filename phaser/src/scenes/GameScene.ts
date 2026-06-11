@@ -59,7 +59,7 @@ interface BigCell {
 }
 interface ClueMini { img: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text; outline: Phaser.GameObjects.Image; value: number; scale: number; }
 interface PressInfo { y: number; x: number; n: number; fired: boolean; }
-interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; }
+interface ClueGroup { objs: Phaser.GameObjects.GameObject[]; minis: ClueMini[]; rule: Rule; gx: number; gy: number; dim: boolean; cellSize: number; }
 interface HintTarget { chip: Chip; group: ClueGroup | null; reason: string; }
 
 // A uniform "highlightable" used by the cross-hover system (board chips, big
@@ -86,6 +86,7 @@ export class GameScene extends Phaser.Scene {
   private zen = false;
   private seededKind?: SeededKind;
   private seededPeriod?: number;
+  private seededNumber?: number;
 
   // results filled in at finish(), read by showEndPanel()
   private bestText: string | null = null;
@@ -138,7 +139,7 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
-  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean; zen?: boolean; seededKind?: SeededKind; seededPeriod?: number }): void {
+  init(data: { size?: number; difficulty?: number; seed?: number; retry?: boolean; zen?: boolean; seededKind?: SeededKind; seededPeriod?: number; seededNumber?: number }): void {
     this.size = data?.size ?? 4;
     this.difficulty = data?.difficulty ?? 0;
     this.seed = data?.seed ?? 0;
@@ -146,6 +147,7 @@ export class GameScene extends Phaser.Scene {
     this.zen = !!data?.zen;
     this.seededKind = data?.seededKind;
     this.seededPeriod = data?.seededPeriod;
+    this.seededNumber = data?.seededNumber;
     this.bestText = null;
     this.newRecord = false;
     this.freshBadges = [];
@@ -828,6 +830,7 @@ export class GameScene extends Phaser.Scene {
       this.busy = true;
       this.time.delayedCall(maxStep * STEP_MS + 420, () => {
         this.busy = false;
+        this.refreshHover();
         if (!this.gameOver && this.board.isWon) this.finish(true);
       });
     } else if (this.board.isWon) {
@@ -941,7 +944,7 @@ export class GameScene extends Phaser.Scene {
     // that the triple clue doesn't logically justify right now).
     if (typeof a === 'number' && typeof b === 'number' && typeof c === 'number') {
       const validPops = new Set(
-        this.model.hintPops(this.board.cells).map((p) => `${p.y}:${p.x}:${p.n}`),
+        this.model.hintPops(this.board.cells, [group.rule]).map((p) => `${p.y}:${p.x}:${p.n}`),
       );
       for (const v of [a, b, c]) {
         const y = Math.floor(v / 10) - 1;
@@ -1045,7 +1048,7 @@ export class GameScene extends Phaser.Scene {
         frame.clear();
         frame.lineStyle(3, 0xffd678, a);
         frame.strokeRoundedRect(chip.cx - fr, chip.cy - fr, fr * 2, fr * 2, 8);
-        if (group) frame.strokeRoundedRect(group.gx - 7, group.gy - 7, RULE_CELL * 3 + 14, RULE_CELL + 14, 10);
+        if (group) frame.strokeRoundedRect(group.gx - 7, group.gy - 7, group.cellSize * 3 + 14, group.cellSize + 14, 10);
       },
     });
 
@@ -1100,21 +1103,31 @@ export class GameScene extends Phaser.Scene {
     const ruleW = RULE_CELL * 3;
 
     if (PORTRAIT) {
-      // clues spread below the board in as many columns as fit the full width
+      // clues spread below the board in as many columns as fit the full width;
+      // if all rules don't fit at the default tile size, shrink until they do.
       this.add.text(GAME.width / 2, CLUES_TOP_Y - 2, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5);
       const colGap = 18;
-      const cols = Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (ruleW + colGap)));
-      const rowH = RULE_CELL + 10;
-      const totalW = cols * ruleW + (cols - 1) * colGap;
-      const startX = (GAME.width - totalW) / 2;
       const top = CLUES_TOP_Y + 24;
+      const availH = GAME.height - top - 8;
+      let ruleCell = RULE_CELL;
+      for (;;) {
+        const rw = ruleCell * 3;
+        const c = Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (rw + colGap)));
+        if (Math.ceil(rules.length / c) * (ruleCell + 10) <= availH || ruleCell <= 28) break;
+        ruleCell -= 2;
+      }
+      const pRuleW = ruleCell * 3;
+      const cols = Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (pRuleW + colGap)));
+      const rowH = ruleCell + 10;
+      const totalW = cols * pRuleW + (cols - 1) * colGap;
+      const startX = (GAME.width - totalW) / 2;
       const perCol = Math.ceil(rules.length / cols);
       rules.forEach((rule, i) => {
         const tx = Math.floor(i / perCol);
         const ty = i % perCol;
-        const gx = startX + tx * (ruleW + colGap);
+        const gx = startX + tx * (pRuleW + colGap);
         const gy = top + ty * rowH;
-        this.makeClueGroup(rule, gx, gy);
+        this.makeClueGroup(rule, gx, gy, ruleCell);
       });
       return;
     }
@@ -1125,30 +1138,33 @@ export class GameScene extends Phaser.Scene {
     const colGap = 16;
     const padX = Math.floor((PANEL - 2 * ruleW - colGap) / 2);
     const rowH = RULE_CELL + 9;
+    const perCol = Math.max(1, Math.floor((GAME.height - RULES_TOP - 8) / rowH));
     rules.forEach((rule, i) => {
-      const ty = i % 14;
-      const tx = Math.floor(i / 14);
+      const ty = i % perCol;
+      const tx = Math.floor(i / perCol);
       const gx = CLUE_X + padX + tx * (ruleW + colGap);
       const gy = RULES_TOP + ty * rowH;
       this.makeClueGroup(rule, gx, gy);
     });
   }
 
-  private makeClueGroup(rule: Rule, gx: number, gy: number): void {
+  private makeClueGroup(rule: Rule, gx: number, gy: number, cellSize = RULE_CELL): void {
     const objs: Phaser.GameObjects.GameObject[] = [];
     const minis: ClueMini[] = [];
-    const miniScale = (RULE_CELL - 3) / 64;
+    const miniScale = (cellSize - 3) / 64;
+    const valFontSize = `${Math.max(10, Math.round((PORTRAIT ? 27 : 19) * cellSize / RULE_CELL))}px`;
+    const opFontSize = `${Math.max(10, Math.round((PORTRAIT ? 30 : 22) * cellSize / RULE_CELL))}px`;
     for (let j = 0; j < 3; j++) {
       const v = rule[j];
-      const sx = gx + j * RULE_CELL + RULE_CELL / 2;
-      const sy = gy + RULE_CELL / 2;
+      const sx = gx + j * cellSize + cellSize / 2;
+      const sy = gy + cellSize / 2;
       if (typeof v === 'number') {
-        const img = this.add.image(sx, sy, MINI).setDisplaySize(RULE_CELL - 3, RULE_CELL - 3).setTint(rowColor(v));
+        const img = this.add.image(sx, sy, MINI).setDisplaySize(cellSize - 3, cellSize - 3).setTint(rowColor(v));
         const outline = this.add
           .image(sx, sy, strokedRoundedTex(this, 64, 64, 12, 5))
           .setScale(miniScale).setTint(0xffffff).setAlpha(0);
         const t = this.add
-          .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: PORTRAIT ? '27px' : '19px', color: '#ffffff' })
+          .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: valFontSize, color: '#ffffff' })
           .setOrigin(0.5);
         // outline is NOT in objs — the dim pass must not leave it visible at
         // 0.32; it's controlled only via glow/dimGroup.
@@ -1156,17 +1172,17 @@ export class GameScene extends Phaser.Scene {
         minis.push({ img, txt: t, outline, value: v, scale: miniScale });
       } else {
         const t = this.add
-          .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: PORTRAIT ? '30px' : '22px', color: palette.accent })
+          .text(sx, sy, OP_SYMBOL[v] ?? String(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: opFontSize, color: palette.accent })
           .setOrigin(0.5);
         objs.push(t);
       }
     }
 
-    const group: ClueGroup = { objs, minis, rule, gx, gy, dim: false };
+    const group: ClueGroup = { objs, minis, rule, gx, gy, dim: false, cellSize };
     this.clueGroups.push(group);
 
     const hit = this.add
-      .rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0)
+      .rectangle(gx, gy, cellSize * 3, cellSize, 0xffffff, 0)
       .setOrigin(0, 0)
       .setInteractive({ useHandCursor: true });
     // Mouse: hover cross-highlights, click dims. Touch (tap-to-select): the
@@ -1310,8 +1326,8 @@ export class GameScene extends Phaser.Scene {
     });
 
     let tx = group.gx - 14 - pw;
-    if (tx < 8) tx = group.gx + RULE_CELL * 3 + 14;
-    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + RULE_CELL / 2 - ph / 2));
+    if (tx < 8) tx = group.gx + group.cellSize * 3 + 14;
+    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + group.cellSize / 2 - ph / 2));
     this.tooltip = this.add.container(tx, ty, objs).setDepth(80);
   }
 
@@ -1389,8 +1405,69 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private shareText(): string {
+    const diffNames = ['Easy', 'Normal', 'Hard'];
+    const tag = this.seededKind
+      ? `${this.seededKind.charAt(0).toUpperCase() + this.seededKind.slice(1)} #${this.seededNumber ?? this.seededPeriod}`
+      : `${this.size}×${this.size} ${diffNames[this.difficulty] ?? ''}`;
+    const mins = Math.floor(this.seconds / 60);
+    const secs = this.seconds % 60;
+    return `Einstein — ${tag.trim()}\n${mins}:${String(secs).padStart(2, '0')}`;
+  }
+
+  private copyResult(onCopied: () => void): void {
+    const text = this.shareText();
+    const tryExec = (): boolean => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch { return false; }
+    };
+    if (tryExec()) { onCopied(); return; }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(onCopied).catch(() => {});
+    }
+  }
+
+  private refreshHover(): void {
+    if (this.gameOver) return;
+    const ptr = this.input.activePointer;
+    if (!ptr) return;
+    const px = ptr.worldX;
+    const py = ptr.worldY;
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        const { ox, oy } = this.cellOrigin(y, x);
+        if (px < ox || px > ox + this.cellSide || py < oy || py > oy + this.cellSide) continue;
+        const big = this.bigObjs[y][x];
+        if (big) {
+          this.hoverStart(big, [big.value], { glowNow: [this.bigGlow(big)] });
+        } else {
+          for (const [, chip] of this.chips[y][x]) {
+            const hs = chip.sub / 2;
+            if (Math.abs(px - chip.cx) < hs && Math.abs(py - chip.cy) < hs) {
+              this.hoverStart(chip, [chip.value], { liftChip: chip });
+              break;
+            }
+          }
+        }
+        return;
+      }
+    }
+  }
+
   private showEndPanel(won: boolean): void {
     const hasBadges = won && this.freshBadges.length > 0;
+    const showCopy = won && !this.zen && !this.isRetry;
     const bestLine = won
       ? this.zen
         ? 'Zen — not recorded'
@@ -1412,6 +1489,7 @@ export class GameScene extends Phaser.Scene {
     h += 32 * f; // subtitle
     if (bestLine) h += 24 * f;
     if (hasBadges) h += (18 + 6 + this.freshBadges.length * 26) * f;
+    if (showCopy) h += (16 + 36) * f;
     h += 26 * f; // gap before buttons
     const btnH = 52 * f;
     const menuH = 48 * f;
@@ -1470,6 +1548,23 @@ export class GameScene extends Phaser.Scene {
           .setOrigin(0.5).setDepth(102);
         y += 26 * f;
       }
+    }
+
+    if (showCopy) {
+      const copyBtnY = y + (16 + 18) * f;
+      const copyRow: Phaser.GameObjects.GameObject[] = [];
+      const copyBtn = makeButton(this, cx, copyBtnY, 260 * f, 36 * f, 'Copy result', () => {
+        this.copyResult(() => {
+          copyRow.forEach((o) => o.destroy());
+          const done = this.add.text(cx, copyBtnY, '✓  Copied!', {
+            fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.round(16 * f)}px`, color: '#86c87a',
+          }).setOrigin(0.5).setDepth(103);
+          this.tweens.add({ targets: done, alpha: 0, delay: 1500, duration: 400, onComplete: () => done.destroy() });
+        });
+      }, { fontSize: Math.round(16 * f) });
+      copyBtn.root.setDepth(102);
+      copyRow.push(copyBtn.root);
+      y += (16 + 36) * f;
     }
 
     const btnY = y + 52 * f;

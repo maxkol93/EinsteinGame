@@ -22,7 +22,7 @@ let fails = 0;
 let clueSum = 0;
 const t0 = Date.now();
 
-for (const size of [4, 5, 6]) {
+for (const size of [4, 5, 6, 7]) {
   for (const diff of [0, 1, 2]) {
     for (let k = 0; k < 30; k++) {
       total += 1;

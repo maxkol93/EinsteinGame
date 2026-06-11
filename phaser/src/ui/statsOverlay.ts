@@ -7,7 +7,7 @@ import { ACHIEVEMENTS } from '../model/achievements';
 
 const MILESTONES = [3, 5, 10, 20, 50];
 const DIFFS: Array<[string, number]> = [['Easy', 0], ['Normal', 1], ['Hard', 2]];
-const SIZES = [4, 5, 6];
+const SIZES = [4, 5, 6, 7];
 
 function fmtTime(s: number | null): string {
   if (!s) return '--:--';
@@ -87,7 +87,7 @@ export function openStatsOverlay(scene: Phaser.Scene): void {
   const winsW = 40;
   const starGap = Math.min(30, (tw - nameW - bestW - winsW - 8) / MILESTONES.length);
   const starsX = tx + nameW + bestW + winsW;
-  const rows = 3 + DIFFS.length * SIZES.length; // 12
+  const rows = 3 + DIFFS.length * SIZES.length; // 15 with 4 sizes
   const rowH = Math.min(30, (bodyH - 28) / (rows + 1));
 
   let y = bodyTop + 6;
@@ -142,10 +142,10 @@ function openStatsOverlayPortrait(scene: Phaser.Scene): void {
   const pw = GAME.width - 40;
   const innerW = pw - 2 * pad;
 
-  // Table rows: 3 seeded + 9 diff×size = 12; plus header
+  // Table rows: 3 seeded + 12 diff×size = 15; plus header
   const tblRowH = 24;
   const tblHeaderH = 28;
-  const tblH = tblHeaderH + 12 * tblRowH + 6;
+  const tblH = tblHeaderH + 15 * tblRowH + 6;
 
   // Achievement grid: 2 columns, 5 rows
   const achCols = 2;

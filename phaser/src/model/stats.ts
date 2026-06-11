@@ -17,7 +17,7 @@
 
 const STORE_KEY = 'einsteingame_stats';
 const DIFF_KEY: Record<number, string> = { 0: 'easy', 1: 'normal', 2: 'hard' };
-export const SIZES = [4, 5, 6] as const;
+export const SIZES = [4, 5, 6, 7] as const;
 const DIFFS = [0, 1, 2] as const;
 
 // Par time (seconds) per (board size, difficulty index) — for the "Quicksilver"
@@ -26,6 +26,7 @@ const PAR: Record<number, [number, number, number]> = {
   4: [45, 75, 120],
   5: [70, 120, 185],
   6: [95, 165, 255],
+  7: [130, 220, 355],
 };
 
 export function parTime(size: number, difficulty: number): number {

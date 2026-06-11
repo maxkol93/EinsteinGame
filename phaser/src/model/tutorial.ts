@@ -34,7 +34,7 @@ export const FINAL_TEXT =
   'Tutorial complete — well done! Every mode and board size is now available in the menu (you still unlock them one by one by playing). In a real game mistakes cost lives, the timer runs and your records are kept. Go set some times!';
 
 const BLOCK_INTRO: Record<number, string> = {
-  0: WELCOME_TEXT,
+  0: 'Every cell holds a few candidate symbols. Pop the wrong ones with a quick tap — when a single symbol is left, the cell solves itself. Go ahead and try it.',
   1: 'New rule — Same column: the two linked symbols share one column. Your clues live on the CLUES panel, on the right of the board.',
   2: 'New rule — Neighbors: the two linked symbols sit in side-by-side columns.',
   3: 'New rule — Left of: the first symbol sits somewhere to the left of the second one.',
