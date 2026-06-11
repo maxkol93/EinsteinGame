@@ -1485,32 +1485,64 @@ export class GameScene extends Phaser.Scene {
 
     const txt = `Einstein — ${this.getShareTag()}\n${shareTime}`;
 
-    // execCommand is synchronous and works inside iframes (no Permissions Policy).
-    // Call it NOW while still inside the button's gesture context.
-    let execOk = false;
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = txt;
-      Object.assign(ta.style, { position: 'fixed', top: '-9999px', opacity: '0' });
-      document.body.appendChild(ta); ta.focus(); ta.select();
-      execOk = document.execCommand('copy');
-      document.body.removeChild(ta);
-    } catch { /* */ }
-    if (execOk) onCopied();
-
-    // Async: try to upgrade to image (overwrites clipboard with the card).
-    // In standalone Chrome this replaces the text; in iframe it fails silently.
     document.fonts.ready.then(() => {
       canvas.toBlob(async (blob) => {
-        if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-          try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); } catch { /* blocked in iframe */ }
+        if (!blob) return;
+
+        // Try direct image copy (works in standalone browser, blocked in itch.io iframe).
+        if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            onCopied();
+            return;
+          } catch { /* blocked by iframe permissions policy → fall through */ }
         }
-        // If execCommand also failed (some edge cases), try async text as last resort.
-        if (!execOk) {
-          try { await navigator.clipboard?.writeText(txt); onCopied(); } catch { /* nothing we can do */ }
-        }
+
+        // Clipboard unavailable: show the card as a DOM overlay so the player
+        // can long-press (mobile) or right-click (desktop) to copy / save it.
+        this.showShareOverlay(blob, txt, onCopied);
       }, 'image/png');
     });
+  }
+
+  private showShareOverlay(blob: Blob, fallbackText: string, onShown: () => void): void {
+    const url = URL.createObjectURL(blob);
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = [
+      'position:fixed;inset:0;z-index:9999',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'background:rgba(0,0,0,.78);cursor:pointer;',
+    ].join(';');
+
+    const card = document.createElement('img');
+    card.src = url;
+    card.style.cssText = 'max-width:min(480px,90vw);border-radius:14px;box-shadow:0 6px 40px rgba(0,0,0,.7);cursor:default;';
+    card.addEventListener('click', (e) => e.stopPropagation()); // don't close on card tap
+
+    const hint = document.createElement('p');
+    const isMobile = navigator.maxTouchPoints > 0;
+    hint.textContent = isMobile
+      ? 'Hold on image to copy or save'
+      : 'Right-click image → Copy image · Tap outside to close';
+    hint.style.cssText = 'color:#cdc3be;font:14px/1.4 Arial,sans-serif;margin:16px 0 0;text-align:center;pointer-events:none;';
+
+    const close = () => { wrap.remove(); URL.revokeObjectURL(url); };
+    wrap.addEventListener('click', close);
+
+    // Fallback: also copy the text so paste into chat still gives something.
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = fallbackText;
+      Object.assign(ta.style, { position: 'fixed', top: '-9999px', opacity: '0' });
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch { /* */ }
+
+    wrap.append(card, hint);
+    document.body.appendChild(wrap);
+    onShown();
   }
 
   private refreshHover(): void {
