@@ -13,7 +13,7 @@ import { TutorialDirector, BLOCK_NAMES } from '../model/tutorial';
 import { seededConfig, SeededKind } from '../model/daily';
 import { openStatsOverlay } from '../ui/statsOverlay';
 
-const SIZES = [4, 5, 6, 7];
+const SIZES = [4, 5, 6]; // 7×7 hidden from UI — activate via keyboard key '7' for testing
 const DIFFS = ['Easy', 'Normal', 'Hard'];
 const CX_L = 360; // left column centre
 const PANEL_X = 700; // right options panel left edge
@@ -60,6 +60,11 @@ export class MenuScene extends Phaser.Scene {
       this.showNotice(settings.unlockAll ? 'Debug: everything unlocked' : 'Debug: progression locks on');
       this.refreshLocks();
     });
+    // 7 starts a 7×7 game directly (hidden mode, dev/testing shortcut).
+    this.input.keyboard?.on('keydown-SEVEN', () => {
+      if (this.scene.isPaused('game') || this.scene.isSleeping('game')) this.scene.stop('game');
+      this.scene.start('game', { size: 7, difficulty: this.difficulty, zen: settings.zen });
+    });
 
     this.buildTitle();
     if (PORTRAIT) {
@@ -80,10 +85,8 @@ export class MenuScene extends Phaser.Scene {
     const cx = GAME.width / 2;
     const bw = GAME.width - 48;
     const S = 1.3; // slider/toggle size scale
-    const cw = (bw - 28) / 3; // three-across column width (difficulties)
+    const cw = (bw - 28) / 3; // three-across column width
     const xAt = (i: number): number => cx - bw / 2 + cw / 2 + i * (cw + 14);
-    const cw4 = (bw - 42) / 4; // four-across column width (board sizes)
-    const xAt4 = (i: number): number => cx - bw / 2 + cw4 / 2 + i * (cw4 + 14);
     const lbl = (t: string, cy: number): void => { this.add.text(cx, cy, t, { fontFamily: FONT, fontSize: '18px', color: palette.accent }).setOrigin(0.5).setLetterSpacing(1); };
 
     interface Block { h: number; gap: number; render: (cy: number) => void }
@@ -93,9 +96,9 @@ export class MenuScene extends Phaser.Scene {
     push(22, 22, (cy) => lbl('BOARD SIZE', cy));
     push(62, 12, (cy) => {
       this.sizeBtns = SIZES.map((s, i) => {
-        const x = xAt4(i);
-        const b = makeButton(this, x, cy, cw4, 62, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size, fontSize: 22 });
-        const lock = this.add.text(x + cw4 / 2 - 20, cy, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
+        const x = xAt(i);
+        const b = makeButton(this, x, cy, cw, 62, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size, fontSize: 22 });
+        const lock = this.add.text(x + cw / 2 - 20, cy, '🔒', { fontSize: '20px' }).setOrigin(0.5).setVisible(false);
         lock.setDepth(b.root.depth + 1);
         this.sizeLockMarks.push(lock);
         return b;
@@ -169,8 +172,8 @@ export class MenuScene extends Phaser.Scene {
 
     this.add.text(cx, 178, 'BOARD SIZE', { fontFamily: FONT, fontSize: '15px', color: palette.accent }).setOrigin(0.5);
     this.sizeBtns = SIZES.map((s, i) => {
-      const w = 88;
-      const gap = 10;
+      const w = 118;
+      const gap = 12;
       const x = cx - (SIZES.length - 1) * (w + gap) * 0.5 + i * (w + gap);
       const b = makeButton(this, x, 212, w, 48, `${s}×${s}`, () => this.selectSize(s), { selected: s === this.size });
       const lock = this.add.text(x + w / 2 - 16, 212, '🔒', { fontSize: '16px' }).setOrigin(0.5).setVisible(false);

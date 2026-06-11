@@ -1435,114 +1435,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   private copyResult(onCopied: () => void): void {
-    const W = 480, H = 174;
-    const DPR = 2;
-    const canvas = document.createElement('canvas');
-    canvas.width = W * DPR; canvas.height = H * DPR;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.scale(DPR, DPR);
+    const time = `${Math.floor(this.seconds / 60)}:${String(this.seconds % 60).padStart(2, '0')}`;
+    const mistakes = this.mistakes === 1 ? '1 mistake' : `${this.mistakes} mistakes`;
+    const text = [
+      `Einstein — ${this.getShareTag()}`,
+      `${time} · ${mistakes}`,
+      'zidan-banan.itch.io/einstein-game',
+    ].join('\n');
 
-    const rr = (x: number, y: number, w: number, h: number, r: number) => {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-      ctx.lineTo(x + w, y + h - r);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-      ctx.lineTo(x + r, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
-    };
-
-    ctx.fillStyle = '#1e1b1f'; rr(0, 0, W, H, 16); ctx.fill();
-    ctx.strokeStyle = '#ffd678'; ctx.lineWidth = 2.5; rr(1.25, 1.25, W - 2.5, H - 2.5, 15); ctx.stroke();
-
-    const font = '"DejaVu Sans", Arial, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-
-    ctx.fillStyle = '#ffe27a'; ctx.font = `bold 28px ${font}`;
-    ctx.fillText('EINSTEIN', W / 2, 34);
-
-    ctx.fillStyle = '#f5f0ec'; ctx.font = `bold 20px ${font}`;
-    ctx.fillText(this.getShareTag(), W / 2, 70);
-
-    const timeStr = this.fmt(this.seconds); // 00:04 for the canvas card
-    const shareTime = `${Math.floor(this.seconds / 60)}:${String(this.seconds % 60).padStart(2, '0')}`; // 0:04 for text
-    ctx.fillStyle = '#cdc3be'; ctx.font = `17px ${font}`;
-    ctx.fillText(`${timeStr}   ·   ${this.mistakes} ${this.mistakes === 1 ? 'mistake' : 'mistakes'}`, W / 2, 103);
-
-    ctx.fillStyle = '#7ab89a'; ctx.font = `14px ${font}`;
-    ctx.fillText('zidan-banan.itch.io/einstein-game', W / 2, 132);
-
-    const rowColors = Object.values(palette.rows) as string[];
-    const dotR = 4, dotGap = 18;
-    const dotsW = (rowColors.length - 1) * dotGap;
-    rowColors.forEach((col, i) => {
-      ctx.fillStyle = col; ctx.beginPath();
-      ctx.arc(W / 2 - dotsW / 2 + i * dotGap, 158, dotR, 0, Math.PI * 2); ctx.fill();
-    });
-
-    const txt = `Einstein — ${this.getShareTag()}\n${shareTime}`;
-
-    document.fonts.ready.then(() => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) return;
-
-        // Try direct image copy (works in standalone browser, blocked in itch.io iframe).
-        if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-          try {
-            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-            onCopied();
-            return;
-          } catch { /* blocked by iframe permissions policy → fall through */ }
-        }
-
-        // Clipboard unavailable: show the card as a DOM overlay so the player
-        // can long-press (mobile) or right-click (desktop) to copy / save it.
-        this.showShareOverlay(blob, txt, onCopied);
-      }, 'image/png');
-    });
-  }
-
-  private showShareOverlay(blob: Blob, fallbackText: string, onShown: () => void): void {
-    const url = URL.createObjectURL(blob);
-
-    const wrap = document.createElement('div');
-    wrap.style.cssText = [
-      'position:fixed;inset:0;z-index:9999',
-      'display:flex;flex-direction:column;align-items:center;justify-content:center',
-      'background:rgba(0,0,0,.78);cursor:pointer;',
-    ].join(';');
-
-    const card = document.createElement('img');
-    card.src = url;
-    card.style.cssText = 'max-width:min(480px,90vw);border-radius:14px;box-shadow:0 6px 40px rgba(0,0,0,.7);cursor:default;';
-    card.addEventListener('click', (e) => e.stopPropagation()); // don't close on card tap
-
-    const hint = document.createElement('p');
-    const isMobile = navigator.maxTouchPoints > 0;
-    hint.textContent = isMobile
-      ? 'Hold on image to copy or save'
-      : 'Right-click image → Copy image · Tap outside to close';
-    hint.style.cssText = 'color:#cdc3be;font:14px/1.4 Arial,sans-serif;margin:16px 0 0;text-align:center;pointer-events:none;';
-
-    const close = () => { wrap.remove(); URL.revokeObjectURL(url); };
-    wrap.addEventListener('click', close);
-
-    // Fallback: also copy the text so paste into chat still gives something.
+    // execCommand works inside iframes (no Permissions Policy restriction).
     try {
       const ta = document.createElement('textarea');
-      ta.value = fallbackText;
-      Object.assign(ta.style, { position: 'fixed', top: '-9999px', opacity: '0' });
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:-9999px;opacity:0';
       document.body.appendChild(ta); ta.focus(); ta.select();
-      document.execCommand('copy');
+      const ok = document.execCommand('copy');
       document.body.removeChild(ta);
-    } catch { /* */ }
+      if (ok) { onCopied(); return; }
+    } catch { /* fall through */ }
 
-    wrap.append(card, hint);
-    document.body.appendChild(wrap);
-    onShown();
+    navigator.clipboard?.writeText(text).then(onCopied).catch(() => {});
   }
 
   private refreshHover(): void {
