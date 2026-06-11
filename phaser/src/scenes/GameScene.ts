@@ -1467,7 +1467,8 @@ export class GameScene extends Phaser.Scene {
     ctx.fillStyle = '#f5f0ec'; ctx.font = `bold 20px ${font}`;
     ctx.fillText(this.getShareTag(), W / 2, 70);
 
-    const timeStr = this.fmt(this.seconds);
+    const timeStr = this.fmt(this.seconds); // 00:04 for the canvas card
+    const shareTime = `${Math.floor(this.seconds / 60)}:${String(this.seconds % 60).padStart(2, '0')}`; // 0:04 for text
     ctx.fillStyle = '#cdc3be'; ctx.font = `17px ${font}`;
     ctx.fillText(`${timeStr}   ·   ${this.mistakes} ${this.mistakes === 1 ? 'mistake' : 'mistakes'}`, W / 2, 103);
 
@@ -1482,7 +1483,7 @@ export class GameScene extends Phaser.Scene {
       ctx.arc(W / 2 - dotsW / 2 + i * dotGap, 158, dotR, 0, Math.PI * 2); ctx.fill();
     });
 
-    const txt = `Einstein — ${this.getShareTag()}\n${timeStr}`;
+    const txt = `Einstein — ${this.getShareTag()}\n${shareTime}`;
 
     // execCommand is synchronous and works inside iframes (no Permissions Policy).
     // Call it NOW while still inside the button's gesture context.
