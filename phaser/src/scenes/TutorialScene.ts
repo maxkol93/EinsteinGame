@@ -78,6 +78,8 @@ export class TutorialScene extends Phaser.Scene {
   private hoverGroup: ClueGroup | null = null;
   private lastResult?: CompleteResult; // for the headless verify to drive Continue
   private misuseTaps = 0; // taps on a hold-only level → reminder after a few
+  private armed: { y: number; x: number; n: number } | null = null;
+  private armedCleanup?: () => void;
 
   private tileTex = '';
   private miniTex = '';
@@ -104,6 +106,8 @@ export class TutorialScene extends Phaser.Scene {
     this.finished = false;
     this.press = null;
     this.misuseTaps = 0;
+    this.armed = null;
+    this.armedCleanup = undefined;
     this.clueGroups = [];
 
     this.tileTex = roundedTex(this, 80, 80, 16);
@@ -511,11 +515,49 @@ export class TutorialScene extends Phaser.Scene {
   private bindInput(): void {
     this.input.on('pointerup', () => {
       this.clearHold();
-      if (this.press && !this.press.fired) { const { y, x, n } = this.press; this.press.fired = true; this.act(y, x, n, false); }
+      if (this.press && !this.press.fired) {
+        const { y, x, n } = this.press;
+        this.press.fired = true;
+        if (settings.touch) this.tapSelect(y, x, n);
+        else this.act(y, x, n, false);
+      }
       this.press = null;
       this.longPress?.remove();
       this.longPress = undefined;
     });
+  }
+
+  private tapSelect(y: number, x: number, n: number): void {
+    // Block 0 (gesture practice): delegate directly — existing tap/hold gating applies.
+    if (this.level.block === 0) { this.act(y, x, n, false); return; }
+    if (this.armed && this.armed.y === y && this.armed.x === x && this.armed.n === n) {
+      this.clearArmed();
+      this.act(y, x, n, false);
+    } else {
+      this.setArmed(y, x, n);
+    }
+  }
+
+  private setArmed(y: number, x: number, n: number): void {
+    this.clearArmed();
+    const chip = this.chips[y][x].get(n);
+    if (!chip) return;
+    this.armed = { y, x, n };
+    const g = this.add.graphics().setDepth(24);
+    const r = chip.sub * 0.72;
+    const tween = this.tweens.addCounter({
+      from: 0.4, to: 1, duration: 480, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      onUpdate: (tw) => { const a = tw.getValue() ?? 1; g.clear(); g.lineStyle(3, COLORS.accent, a); g.strokeRoundedRect(chip.cx - r, chip.cy - r, r * 2, r * 2, 8); },
+    });
+    this.armedCleanup = () => { tween.stop(); g.destroy(); };
+    this.hoverStart(chip, [chip.value]);
+  }
+
+  private clearArmed(): void {
+    this.armedCleanup?.();
+    this.armedCleanup = undefined;
+    this.armed = null;
+    this.hoverEnd();
   }
 
   private onDown(y: number, x: number, n: number, pointer: Phaser.Input.Pointer): void {
@@ -556,6 +598,7 @@ export class TutorialScene extends Phaser.Scene {
     const cell = this.board.cells[y][x];
     if (cell.value !== null || !cell.candidates.includes(n)) return;
     this.hoverEnd();
+    this.clearArmed();
     const lv = this.level;
 
     // block 0 gesture gating: the un-taught gesture is a silent no-op nudge —
@@ -729,7 +772,9 @@ export class TutorialScene extends Phaser.Scene {
         return;
       }
       const spotlight = this.dir.block === 1 && this.clueGroups.length
-        ? { x: CLUE_X + 8, y: 100, w: PANEL - 16, h: 60 + this.level.clues.length * (RULE_CELL + 22) }
+        ? PORTRAIT
+          ? { x: 8, y: TUT_CLUES_TOP - 10, w: GAME.width - 16, h: 54 + this.level.clues.length * (RULE_CELL + 16) }
+          : { x: CLUE_X + 8, y: 100, w: PANEL - 16, h: 60 + this.level.clues.length * (RULE_CELL + 22) }
         : undefined;
       this.openPopup({ text: intro, buttonLabel: 'Got it', tag: 'TUTORIAL', spotlight });
       return;
@@ -769,7 +814,7 @@ export class TutorialScene extends Phaser.Scene {
     const fs = (n: number) => `${Math.round(n * f)}px`;
     const cx = GAME.width / 2;
     const pw = Math.round(PORTRAIT ? GAME.width - 50 : 480);
-    const lines = message ? this.wrapLines(message, pw - 60) : [];
+    const lines = message ? this.wrapLines(message, pw - 60, Math.round(17 * f)) : [];
     const trackerRows = this.dir.tracker();
     const trkRowH = Math.round(38 * f);
     const ph = Math.round(150 * f) + lines.length * Math.round(24 * f) + trackerRows.length * trkRowH + Math.round(50 * f);
@@ -826,8 +871,8 @@ export class TutorialScene extends Phaser.Scene {
   }
 
   // ---- text wrap helper ----
-  private wrapLines(text: string, maxW: number): string[] {
-    const probe = this.add.text(0, 0, '', { fontFamily: FONT, fontSize: '17px' }).setVisible(false);
+  private wrapLines(text: string, maxW: number, fontSize = 17): string[] {
+    const probe = this.add.text(0, 0, '', { fontFamily: FONT, fontSize: `${fontSize}px` }).setVisible(false);
     const words = text.split(' ');
     const lines: string[] = [];
     let cur = '';

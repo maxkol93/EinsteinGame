@@ -45,6 +45,9 @@ export class MenuScene extends Phaser.Scene {
   create(): void {
     applyRenderScale(this);
     this.cameras.main.setBackgroundColor(COLORS.bg);
+    // Reset on every create() — arrays use push() so they accumulate across restarts otherwise.
+    this.sizeLockMarks = [];
+    this.diffLockMarks = [];
 
     // Standalone menu plays the menu bed; but when this menu is the pause
     // overlay over a still-paused game or tutorial, keep that loop playing so

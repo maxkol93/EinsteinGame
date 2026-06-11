@@ -134,6 +134,8 @@ export class GameScene extends Phaser.Scene {
   private armedCleanup?: () => void;
   // touch tap-to-select on a clue: the highlighted (but not yet dimmed) clue
   private armedClue: ClueGroup | null = null;
+  private zoomOverlay?: Phaser.GameObjects.Container;
+  private touchInterceptor = false;
 
   constructor() {
     super('game');
@@ -165,6 +167,8 @@ export class GameScene extends Phaser.Scene {
     this.directLiftChip = null;
     this.directGlow = [];
     this.litSpread = [];
+    this.zoomOverlay = undefined;
+    this.touchInterceptor = false;
   }
 
   create(): void {
@@ -660,6 +664,13 @@ export class GameScene extends Phaser.Scene {
       this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
     });
     img.on('pointerout', () => { if (this.hoverSource === big) this.hoverEnd(); });
+    img.on('pointerdown', () => {
+      if (!settings.touch || this.busy || this.gameOver) return;
+      this.touchInterceptor = true;
+      this.clearArmed();
+      this.clearClueHighlight();
+      this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
+    });
 
     if (animate) {
       this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
@@ -683,6 +694,13 @@ export class GameScene extends Phaser.Scene {
       this.longPress?.remove();
       this.longPress = undefined;
     });
+    // Touch mode: tap anywhere that isn't a chip/clue/bigcell clears selection.
+    this.input.on('pointerdown', () => {
+      if (!settings.touch) return;
+      if (this.touchInterceptor) { this.touchInterceptor = false; return; }
+      this.clearArmed();
+      this.clearClueHighlight();
+    });
   }
 
   /** Touch tap-to-select: the first tap ARMS a candidate (a pulsing frame +
@@ -699,30 +717,38 @@ export class GameScene extends Phaser.Scene {
 
   private setArmed(y: number, x: number, n: number): void {
     this.clearArmed();
+    this.clearClueHighlight();
     const chip = this.chips[y][x].get(n);
     if (!chip) return;
     this.armed = { y, x, n };
     const g = this.add.graphics().setDepth(24);
     const r = chip.sub * 0.72;
-    const prompt = this.add.text(chip.cx, chip.cy - chip.sub * 1.05, 'tap again', { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(19, Math.round(chip.sub * 0.42))}px`, color: palette.text, backgroundColor: '#1c1a1edd', padding: { x: 9, y: 5 } }).setOrigin(0.5).setDepth(26);
     const tween = this.tweens.addCounter({
       from: 0.4, to: 1, duration: 480, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
       onUpdate: (tw) => { const a = tw.getValue() ?? 1; g.clear(); g.lineStyle(3, COLORS.accent, a); g.strokeRoundedRect(chip.cx - r, chip.cy - r, r * 2, r * 2, 8); },
     });
-    this.armedCleanup = () => { tween.stop(); g.destroy(); prompt.destroy(); };
+    this.armedCleanup = () => { tween.stop(); g.destroy(); };
+    this.hoverStart(chip, [chip.value], { liftChip: chip });
   }
 
   private clearArmed(): void {
     this.armedCleanup?.();
     this.armedCleanup = undefined;
     this.armed = null;
+    this.hoverEnd();
   }
 
   private onChipDown(y: number, x: number, n: number, pointer: Phaser.Input.Pointer): void {
     if (this.busy || this.gameOver) return;
-    if (pointer.rightButtonDown()) {
-      this.doAction(y, x, n, true);
-      return;
+    if (pointer.rightButtonDown()) { this.doAction(y, x, n, true); return; }
+    if (settings.touch) this.touchInterceptor = true;
+    // Portrait + non-touch mode: tap a multi-candidate cell to zoom it.
+    if (PORTRAIT && !settings.touch && !this.zoomOverlay) {
+      const cell = this.board.cells[y][x];
+      if (cell.value === null && cell.candidates.length > 1) {
+        this.openZoom(y, x);
+        return;
+      }
     }
     this.press = { y, x, n, fired: false };
     const chip = this.chips[y][x].get(n);
@@ -1201,25 +1227,21 @@ export class GameScene extends Phaser.Scene {
       if (this.hoverSource === group) this.hoverEnd();
     });
     hit.on('pointerdown', () => {
-      if (settings.touch) { this.tapClue(group); return; }
+      if (settings.touch) { this.touchInterceptor = true; this.tapClue(group); return; }
       if (group.dim) this.undimGroup(group);
       else this.dimGroup(group);
     });
   }
 
   /** Touch tap on a clue: 1st tap → cross-highlight its values on the board;
-   *  2nd tap on the same clue → dim (cross out) the clue; a tap on a dimmed clue
-   *  → bring it back. Tapping a different clue moves the highlight there. */
+   *  2nd tap on the same clue → clear the highlight (not dim). Tapping a dimmed
+   *  clue undims it. Tapping a different clue moves the highlight there. */
   private tapClue(group: ClueGroup): void {
     if (this.gameOver) return;
     if (group.dim) { this.undimGroup(group); return; }
-    if (this.armedClue && this.armedClue !== group) { this.clearClueHighlight(); }
-    if (this.armedClue === group) {
-      this.dimGroup(group); // dimGroup clears the glow + hover for this group
-      this.hideTooltip();
-      this.armedClue = null;
-      return;
-    }
+    if (this.armedClue && this.armedClue !== group) this.clearClueHighlight();
+    if (this.armedClue === group) { this.clearClueHighlight(); return; }
+    this.clearArmed();
     this.armedClue = group;
     this.showTooltip(group);
     this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
@@ -1405,37 +1427,77 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private shareText(): string {
+  private getShareTag(): string {
     const diffNames = ['Easy', 'Normal', 'Hard'];
-    const tag = this.seededKind
+    return this.seededKind
       ? `${this.seededKind.charAt(0).toUpperCase() + this.seededKind.slice(1)} #${this.seededNumber ?? this.seededPeriod}`
-      : `${this.size}×${this.size} ${diffNames[this.difficulty] ?? ''}`;
-    const mins = Math.floor(this.seconds / 60);
-    const secs = this.seconds % 60;
-    return `Einstein — ${tag.trim()}\n${mins}:${String(secs).padStart(2, '0')}`;
+      : `${this.size}×${this.size}  ${diffNames[this.difficulty] ?? ''}`.trim();
   }
 
   private copyResult(onCopied: () => void): void {
-    const text = this.shareText();
-    const tryExec = (): boolean => {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.top = '-1000px';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        return ok;
-      } catch { return false; }
+    const W = 480, H = 174;
+    const DPR = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(DPR, DPR);
+
+    const rr = (x: number, y: number, w: number, h: number, r: number) => {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
     };
-    if (tryExec()) { onCopied(); return; }
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(onCopied).catch(() => {});
-    }
+
+    ctx.fillStyle = '#1e1b1f'; rr(0, 0, W, H, 16); ctx.fill();
+    ctx.strokeStyle = '#ffd678'; ctx.lineWidth = 2.5; rr(1.25, 1.25, W - 2.5, H - 2.5, 15); ctx.stroke();
+
+    const font = '"DejaVu Sans", Arial, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#ffe27a'; ctx.font = `bold 28px ${font}`;
+    ctx.fillText('EINSTEIN', W / 2, 34);
+
+    ctx.fillStyle = '#f5f0ec'; ctx.font = `bold 20px ${font}`;
+    ctx.fillText(this.getShareTag(), W / 2, 70);
+
+    const timeStr = this.fmt(this.seconds);
+    ctx.fillStyle = '#cdc3be'; ctx.font = `17px ${font}`;
+    ctx.fillText(`${timeStr}   ·   ${this.mistakes} ${this.mistakes === 1 ? 'mistake' : 'mistakes'}`, W / 2, 103);
+
+    ctx.fillStyle = '#7ab89a'; ctx.font = `14px ${font}`;
+    ctx.fillText('zidan-banan.itch.io/einstein-game', W / 2, 132);
+
+    const rowColors = Object.values(palette.rows) as string[];
+    const dotR = 4, dotGap = 18;
+    const dotsW = (rowColors.length - 1) * dotGap;
+    rowColors.forEach((col, i) => {
+      ctx.fillStyle = col; ctx.beginPath();
+      ctx.arc(W / 2 - dotsW / 2 + i * dotGap, 158, dotR, 0, Math.PI * 2); ctx.fill();
+    });
+
+    const doSend = (blob: Blob) => {
+      // Prefer image copy; fall back to plain-text so button always works.
+      const sendImg = async (): Promise<boolean> => {
+        if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) return false;
+        try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); return true; } catch { return false; }
+      };
+      sendImg().then((ok) => {
+        if (ok) { onCopied(); return; }
+        const txt = `Einstein — ${this.getShareTag()}\n${timeStr}`;
+        navigator.clipboard?.writeText(txt).then(onCopied).catch(() => {});
+      });
+    };
+
+    document.fonts.ready.then(() => {
+      canvas.toBlob((blob) => { if (blob) doSend(blob); }, 'image/png');
+    });
   }
 
   private refreshHover(): void {
@@ -1462,6 +1524,81 @@ export class GameScene extends Phaser.Scene {
         }
         return;
       }
+    }
+  }
+
+  /** Zoom a candidate cell to ~76 % of the board width so it's tappable.
+   *  Only triggered in PORTRAIT + non-touch mode (zoom replaces single-tap pop). */
+  private openZoom(cellY: number, cellX: number): void {
+    if (this.zoomOverlay) return;
+    const cell = this.board.cells[cellY][cellX];
+    if (!cell || cell.value !== null) return;
+    const side = Math.round(SPAN * 0.76);
+    const cx = GAME.width / 2;
+    const cy = GAME.height / 2;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+
+    // dimmed backdrop — tap it to close
+    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.72).setInteractive();
+    backdrop.on('pointerdown', () => this.closeZoom());
+    objs.push(backdrop);
+
+    // cell panel
+    const panelTex = roundedTex(this, side, side, Math.round(side * 0.1));
+    const panel = this.add.image(cx, cy, panelTex).setTint(brighten(COLORS.bg, 18));
+    objs.push(panel);
+
+    // candidate tiles inside the panel
+    const inset = Math.max(4, Math.floor(side / 22));
+    const avail = side - 2 * inset;
+    const sub = Math.floor(Math.min(avail / this.candCols, avail / this.candRows));
+    const baseX = cx - side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
+    const baseY = cy - side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
+
+    for (let index = 0; index < this.size; index++) {
+      const v = (cellY + 1) * 10 + index + 1;
+      if (!cell.candidates.includes(v)) continue;
+      const dy = Math.floor(index / this.candCols);
+      const dx = index % this.candCols;
+      const inRow = Math.min(this.candCols, this.size - dy * this.candCols);
+      const rowOff = Math.floor(((this.candCols - inRow) * sub) / 2);
+      const chipCx = baseX + rowOff + dx * sub + sub / 2;
+      const chipCy = baseY + dy * sub + sub / 2;
+      const base = (sub - 3) / 80;
+      const color = rowColor(v);
+      const img = this.add.image(chipCx, chipCy, TILE).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
+      const txt = this.add.text(chipCx, chipCy, symbolFor(v), {
+        fontFamily: FONT, fontStyle: 'bold',
+        fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff',
+      }).setOrigin(0.5);
+      img.on('pointerover', () => img.setTint(brighten(color, 56)));
+      img.on('pointerout', () => img.setTint(color));
+      img.on('pointerdown', () => { this.closeZoom(false); this.doAction(cellY, cellX, v, false); });
+      objs.push(img, txt);
+    }
+
+    const container = this.add.container(0, 0, objs).setDepth(60).setAlpha(0);
+    // scale-in entrance from the tapped cell
+    const { ox, oy } = this.cellOrigin(cellY, cellX);
+    const originX = ox + this.cellSide / 2;
+    const originY = oy + this.cellSide / 2;
+    container.setX(originX - cx).setY(originY - cy).setScale(0.3);
+    this.tweens.add({ targets: container, x: 0, y: 0, scale: 1, alpha: 1, duration: 240, ease: 'Back.easeOut' });
+    this.zoomOverlay = container;
+  }
+
+  private closeZoom(animate = true): void {
+    if (!this.zoomOverlay) return;
+    const c = this.zoomOverlay;
+    this.zoomOverlay = undefined;
+    // Immediately disable all interactives to prevent double-fire during close tween.
+    c.each((child: Phaser.GameObjects.GameObject) => {
+      (child as Phaser.GameObjects.Image).disableInteractive?.();
+    });
+    if (animate) {
+      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => c.destroy() });
+    } else {
+      c.destroy();
     }
   }
 
