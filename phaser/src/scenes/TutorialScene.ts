@@ -83,6 +83,7 @@ export class TutorialScene extends Phaser.Scene {
   private armedClue: ClueGroup | null = null;
   private touchInterceptorTut = false;
   private zoomOverlay?: Phaser.GameObjects.Container;
+  private zoomBackdrop?: Phaser.GameObjects.Rectangle;
 
   private tileTex = '';
   private miniTex = '';
@@ -653,18 +654,23 @@ export class TutorialScene extends Phaser.Scene {
     const side = Math.round(SPAN * 0.76);
     const cx = GAME.width / 2;
     const cy = GAME.height / 2;
-    const objs: Phaser.GameObjects.GameObject[] = [];
-    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.72).setInteractive();
+
+    // Backdrop separate from panel — never scales with the zoom animation.
+    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0).setInteractive().setDepth(59);
     backdrop.on('pointerdown', () => this.closeZoom());
-    objs.push(backdrop);
+    this.tweens.add({ targets: backdrop, fillAlpha: 0.72, duration: 180 });
+    this.zoomBackdrop = backdrop;
+
+    const objs: Phaser.GameObjects.GameObject[] = [];
     const panelTex = roundedTex(this, side, side, Math.round(side * 0.1));
-    const panel = this.add.image(cx, cy, panelTex).setTint(brighten(COLORS.bg, 18));
+    const panel = this.add.image(0, 0, panelTex).setTint(brighten(COLORS.bg, 18));
     objs.push(panel);
     const inset = Math.max(4, Math.floor(side / 22));
     const avail = side - 2 * inset;
     const sub = Math.floor(Math.min(avail / this.candCols, avail / this.candRows));
-    const baseX = cx - side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
-    const baseY = cy - side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
+    // local coords relative to panel centre (0,0)
+    const baseX = -side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
+    const baseY = -side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
     let zoomPressedV = -1;
     let zoomPressFired = false;
     let zoomRing: Phaser.GameObjects.Graphics | undefined;
@@ -681,12 +687,14 @@ export class TutorialScene extends Phaser.Scene {
       const dx = index % this.candCols;
       const inRow = Math.min(this.candCols, this.size - dy * this.candCols);
       const rowOff = Math.floor(((this.candCols - inRow) * sub) / 2);
-      const chipCx = baseX + rowOff + dx * sub + sub / 2;
-      const chipCy = baseY + dy * sub + sub / 2;
+      const chipLx = baseX + rowOff + dx * sub + sub / 2;
+      const chipLy = baseY + dy * sub + sub / 2;
+      const chipWx = cx + chipLx;
+      const chipWy = cy + chipLy;
       const base = (sub - 3) / 80;
       const color = rowColor(v);
-      const img = this.add.image(chipCx, chipCy, this.tileTex).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
-      const txt = this.add.text(chipCx, chipCy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff' }).setOrigin(0.5);
+      const img = this.add.image(chipLx, chipLy, this.tileTex).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
+      const txt = this.add.text(chipLx, chipLy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff' }).setOrigin(0.5);
       img.on('pointerover', () => img.setTint(brighten(color, 56)));
       img.on('pointerout', () => { img.setTint(color); if (zoomPressedV === v) clearZoomPress(); });
       img.on('pointerdown', () => {
@@ -700,9 +708,9 @@ export class TutorialScene extends Phaser.Scene {
           onUpdate: (tw) => {
             const t = tw.getValue() ?? 0;
             gr.clear();
-            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipCx, chipCy, r);
+            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipWx, chipWy, r);
             gr.lineStyle(5, 0xffe27a, 0.95); gr.beginPath();
-            gr.arc(chipCx, chipCy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
+            gr.arc(chipWx, chipWy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
           },
           onComplete: () => { zoomPressFired = true; clearZoomPress(); this.closeZoom(false); this.act(cellY, cellX, v, true); },
         });
@@ -712,22 +720,27 @@ export class TutorialScene extends Phaser.Scene {
       });
       objs.push(img, txt);
     }
-    const container = this.add.container(0, 0, objs).setDepth(60).setAlpha(0);
+    // Container starts at the tapped cell centre and grows to canvas centre.
     const { ox, oy } = this.cellOrigin(cellY, cellX);
-    container.setX(ox + this.cellSide / 2 - cx).setY(oy + this.cellSide / 2 - cy).setScale(0.3);
-    this.tweens.add({ targets: container, x: 0, y: 0, scale: 1, alpha: 1, duration: 240, ease: 'Back.easeOut' });
+    const startScale = Math.min(1, this.cellSide / side);
+    const container = this.add.container(ox + this.cellSide / 2, oy + this.cellSide / 2, objs).setDepth(60).setScale(startScale).setAlpha(0.4);
+    this.tweens.add({ targets: container, x: cx, y: cy, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
     this.zoomOverlay = container;
   }
 
   private closeZoom(animate = true): void {
     if (!this.zoomOverlay) return;
     const c = this.zoomOverlay;
+    const bd = this.zoomBackdrop;
     this.zoomOverlay = undefined;
+    this.zoomBackdrop = undefined;
     c.each((child: Phaser.GameObjects.GameObject) => { (child as Phaser.GameObjects.Image).disableInteractive?.(); });
+    bd?.disableInteractive();
     if (animate) {
-      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => c.destroy() });
+      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => { c.destroy(); bd?.destroy(); } });
+      this.tweens.add({ targets: bd, fillAlpha: 0, duration: 160 });
     } else {
-      c.destroy();
+      c.destroy(); bd?.destroy();
     }
   }
 
@@ -883,13 +896,14 @@ export class TutorialScene extends Phaser.Scene {
     hit.on('pointerout', () => {
       if (PORTRAIT) return;
       this.hideTooltip();
-      if (this.armedClue === group) return;
-      if (this.hoverGroup === group) this.hoverEnd();
+      if (this.hoverGroup === group) this.hoverEnd(); // always clear on desktop
     });
-    hit.on('pointerdown', () => {
-      if (PORTRAIT) this.touchInterceptorTut = true;
-      this.tapClue(group);
-    });
+    if (PORTRAIT) {
+      hit.on('pointerdown', () => {
+        this.touchInterceptorTut = true;
+        this.tapClue(group);
+      });
+    }
   }
 
   private valueSolved(n: number): boolean {

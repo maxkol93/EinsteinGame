@@ -135,6 +135,8 @@ export class GameScene extends Phaser.Scene {
   // touch tap-to-select on a clue: the highlighted (but not yet dimmed) clue
   private armedClue: ClueGroup | null = null;
   private zoomOverlay?: Phaser.GameObjects.Container;
+  private zoomBackdrop?: Phaser.GameObjects.Rectangle;
+  private remainingText?: Phaser.GameObjects.Text;
   private touchInterceptor = false;
 
   constructor() {
@@ -280,11 +282,14 @@ export class GameScene extends Phaser.Scene {
         this.updateLives();
       }
       this.add.text(GAME.width / 2 + 70, 110, modeLabel, { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5);
-      this.add.text(GAME.width / 2 + 70, 132, `${cplx} cells given`, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
+      this.remainingText = this.add.text(GAME.width / 2 + 70, 132, '', { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
+      this.updateRemaining();
       return;
     }
 
-    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
+    // Mode label sits at the very top of the left panel, above MENU
+    this.add.text(PANEL / 2, 15, modeLabel, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
+    makeButton(this, PANEL / 2, 46, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
 
     this.add.text(PANEL / 2, 120, 'T I M E', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     this.timerText = this.add
@@ -304,14 +309,9 @@ export class GameScene extends Phaser.Scene {
       this.updateLives();
     }
 
-    this.add
-      .text(PANEL / 2, 268, modeLabel, {
-        fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text,
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(PANEL / 2, 292, `${cplx} cells given`, { fontFamily: FONT, fontSize: '13px', color: palette.accent })
-      .setOrigin(0.5);
+    this.add.text(PANEL / 2, 258, 'C E L L S  L E F T', { fontFamily: FONT, fontSize: '11px', color: palette.accent }).setOrigin(0.5);
+    this.remainingText = this.add.text(PANEL / 2, 290, '', { fontFamily: FONT, fontStyle: 'bold', fontSize: '30px', color: palette.text }).setOrigin(0.5);
+    this.updateRemaining();
 
     this.hintBtn = makeButton(this, PANEL / 2, GAME.height - 60, PANEL - 60, 46, 'HINT', () => this.hint(), { fontSize: 18, fill: brighten(COLORS.panel, 44) });
   }
@@ -848,6 +848,7 @@ export class GameScene extends Phaser.Scene {
       this.time.delayedCall(delay, () => {
         this.renderBig(r.y, r.x, r.n, true);
         audio.play(key);
+        this.updateRemaining();
       });
     }
     if (cs.resolved.length > 0) {
@@ -1239,13 +1240,14 @@ export class GameScene extends Phaser.Scene {
     hit.on('pointerout', () => {
       if (PORTRAIT) return;
       this.hideTooltip();
-      if (this.armedClue === group) return; // keep highlight when clue is armed
-      if (this.hoverSource === group) this.hoverEnd();
+      if (this.hoverSource === group) this.hoverEnd(); // always clear on desktop (no armed state)
     });
-    hit.on('pointerdown', () => {
-      if (PORTRAIT) this.touchInterceptor = true;
-      this.tapClue(group);
-    });
+    if (PORTRAIT) {
+      hit.on('pointerdown', () => {
+        this.touchInterceptor = true;
+        this.tapClue(group);
+      });
+    }
   }
 
   /** Tap/click a clue: 1st tap highlights its values on the board (armed);
@@ -1267,6 +1269,15 @@ export class GameScene extends Phaser.Scene {
     if (this.hoverSource === this.armedClue) this.hoverEnd();
     this.hideTooltip();
     this.armedClue = null;
+  }
+
+  private updateRemaining(): void {
+    if (!this.remainingText) return;
+    let rem = 0;
+    for (let y = 0; y < this.size; y++)
+      for (let x = 0; x < this.size; x++)
+        if (this.board.cells[y][x].value === null) rem++;
+    this.remainingText.setText(PORTRAIT ? `${rem} left` : String(rem));
   }
 
   /** True once value `n` sits in a solved big cell (board state, not the
@@ -1515,24 +1526,38 @@ export class GameScene extends Phaser.Scene {
     const side = Math.round(SPAN * 0.76);
     const cx = GAME.width / 2;
     const cy = GAME.height / 2;
-    const objs: Phaser.GameObjects.GameObject[] = [];
 
-    // dimmed backdrop — tap it to close
-    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.72).setInteractive();
+    // Backdrop: separate from the panel so it never scales with the animation.
+    // It fades in immediately to full coverage, tap it to close.
+    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0).setInteractive().setDepth(59);
     backdrop.on('pointerdown', () => this.closeZoom());
-    objs.push(backdrop);
+    this.tweens.add({ targets: backdrop, fillAlpha: 0.72, duration: 180 });
+    this.zoomBackdrop = backdrop;
 
-    // cell panel
+    // Panel children positioned at local (0,0) = panel centre.
+    // The container starts at the tapped cell and grows to canvas centre.
+    const objs: Phaser.GameObjects.GameObject[] = [];
     const panelTex = roundedTex(this, side, side, Math.round(side * 0.1));
-    const panel = this.add.image(cx, cy, panelTex).setTint(brighten(COLORS.bg, 18));
+    const panel = this.add.image(0, 0, panelTex).setTint(brighten(COLORS.bg, 18));
     objs.push(panel);
 
-    // candidate tiles inside the panel
     const inset = Math.max(4, Math.floor(side / 22));
     const avail = side - 2 * inset;
     const sub = Math.floor(Math.min(avail / this.candCols, avail / this.candRows));
-    const baseX = cx - side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
-    const baseY = cy - side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
+    // local coords relative to panel centre (0,0)
+    const baseX = -side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
+    const baseY = -side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
+
+    // Hold-to-define state shared across all chip handlers in this zoom session.
+    let zoomPressedV = -1;
+    let zoomPressFired = false;
+    let zoomRing: Phaser.GameObjects.Graphics | undefined;
+    let zoomRingTween: Phaser.Tweens.Tween | undefined;
+    const clearZoomPress = (): void => {
+      zoomRingTween?.stop(); zoomRingTween = undefined;
+      zoomRing?.destroy(); zoomRing = undefined;
+      zoomPressedV = -1; zoomPressFired = false;
+    };
 
     for (let index = 0; index < this.size; index++) {
       const v = (cellY + 1) * 10 + index + 1;
@@ -1541,12 +1566,16 @@ export class GameScene extends Phaser.Scene {
       const dx = index % this.candCols;
       const inRow = Math.min(this.candCols, this.size - dy * this.candCols);
       const rowOff = Math.floor(((this.candCols - inRow) * sub) / 2);
-      const chipCx = baseX + rowOff + dx * sub + sub / 2;
-      const chipCy = baseY + dy * sub + sub / 2;
+      // local (container-relative) position
+      const chipLx = baseX + rowOff + dx * sub + sub / 2;
+      const chipLy = baseY + dy * sub + sub / 2;
+      // world position after animation (container ends at cx, cy, scale 1)
+      const chipWx = cx + chipLx;
+      const chipWy = cy + chipLy;
       const base = (sub - 3) / 80;
       const color = rowColor(v);
-      const img = this.add.image(chipCx, chipCy, TILE).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
-      const txt = this.add.text(chipCx, chipCy, symbolFor(v), {
+      const img = this.add.image(chipLx, chipLy, TILE).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
+      const txt = this.add.text(chipLx, chipLy, symbolFor(v), {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff',
       }).setOrigin(0.5);
@@ -1563,9 +1592,9 @@ export class GameScene extends Phaser.Scene {
           onUpdate: (tw) => {
             const t = tw.getValue() ?? 0;
             gr.clear();
-            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipCx, chipCy, r);
+            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipWx, chipWy, r);
             gr.lineStyle(5, 0xffe27a, 0.95); gr.beginPath();
-            gr.arc(chipCx, chipCy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
+            gr.arc(chipWx, chipWy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
           },
           onComplete: () => { zoomPressFired = true; clearZoomPress(); this.closeZoom(false); this.doAction(cellY, cellX, v, true); },
         });
@@ -1576,39 +1605,29 @@ export class GameScene extends Phaser.Scene {
       objs.push(img, txt);
     }
 
-    // Hold-to-define state shared across all chip handlers in this zoom session.
-    let zoomPressedV = -1;
-    let zoomPressFired = false;
-    let zoomRing: Phaser.GameObjects.Graphics | undefined;
-    let zoomRingTween: Phaser.Tweens.Tween | undefined;
-    const clearZoomPress = (): void => {
-      zoomRingTween?.stop(); zoomRingTween = undefined;
-      zoomRing?.destroy(); zoomRing = undefined;
-      zoomPressedV = -1; zoomPressFired = false;
-    };
-
-    const container = this.add.container(0, 0, objs).setDepth(60).setAlpha(0);
-    // scale-in entrance from the tapped cell
+    // Container starts at the tapped cell's centre, scaled to cell size → animates to canvas centre at full size.
     const { ox, oy } = this.cellOrigin(cellY, cellX);
-    const originX = ox + this.cellSide / 2;
-    const originY = oy + this.cellSide / 2;
-    container.setX(originX - cx).setY(originY - cy).setScale(0.3);
-    this.tweens.add({ targets: container, x: 0, y: 0, scale: 1, alpha: 1, duration: 240, ease: 'Back.easeOut' });
+    const startScale = Math.min(1, this.cellSide / side);
+    const container = this.add.container(ox + this.cellSide / 2, oy + this.cellSide / 2, objs).setDepth(60).setScale(startScale).setAlpha(0.4);
+    this.tweens.add({ targets: container, x: cx, y: cy, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
     this.zoomOverlay = container;
   }
 
   private closeZoom(animate = true): void {
     if (!this.zoomOverlay) return;
     const c = this.zoomOverlay;
+    const bd = this.zoomBackdrop;
     this.zoomOverlay = undefined;
-    // Immediately disable all interactives to prevent double-fire during close tween.
+    this.zoomBackdrop = undefined;
     c.each((child: Phaser.GameObjects.GameObject) => {
       (child as Phaser.GameObjects.Image).disableInteractive?.();
     });
+    bd?.disableInteractive();
     if (animate) {
-      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => c.destroy() });
+      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => { c.destroy(); bd?.destroy(); } });
+      this.tweens.add({ targets: bd, fillAlpha: 0, duration: 160 });
     } else {
-      c.destroy();
+      c.destroy(); bd?.destroy();
     }
   }
 

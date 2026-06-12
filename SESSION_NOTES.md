@@ -2,6 +2,20 @@
 
 Quick context for resuming work. Latest session: **2026-06-12**.
 
+## 2026-06-12 — Phaser: cover GIF for itch.io
+
+Script `phaser/tools/promo/cover-gif.mjs` — pure Canvas 2D via headless Playwright, no game server.
+Output: `itch-assets/cover-animated.gif`, 630×500, 2.76 MB, 64 frames.
+
+Animation: 3 phases —
+1. Static zoom (12 × 110 ms) — "EINSTEIN" title + 4×4 board at 2.8× scale, −8° tilt; ~6-9 cells
+   visible around the top-left quadrant; 7 pre-solved (big tiles), 2 showing candidates.
+2. Pull-back (20 × 72 ms, cubic easeInOut) — camera scale 2.8→1.0, rotation −8°→0°, full
+   board visible.
+3. Cascade (9 cells × 3 × 80 ms) + hold (5 × 120 ms) — remaining cells pop one by one.
+
+Font served from disk via `page.route()` interceptor (no CDN needed).
+
 ## 2026-06-12 — Phaser: mobile UX + clue/tooltip redesign
 
 1. **Copy result removed** — "Copy result" button gone from the win panel.
