@@ -134,7 +134,6 @@ export class MenuScene extends Phaser.Scene {
     push(42, 22, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v), S));
     push(42, 14, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v), S));
     push(40, 16, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; }, S));
-    push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; }, S));
     push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); }, S));
     push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; }, S));
 
@@ -251,8 +250,6 @@ export class MenuScene extends Phaser.Scene {
     makeSlider(this, ix, y, iw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v));
     y += 60;
     makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
-    y += 40;
-    makeToggle(this, ix, y, iw, 'Tap to select  (touch)', settings.touch, (on) => { settings.touch = on; });
     y += 40;
     makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); });
     y += 40;

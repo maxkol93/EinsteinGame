@@ -80,6 +80,9 @@ export class TutorialScene extends Phaser.Scene {
   private misuseTaps = 0; // taps on a hold-only level → reminder after a few
   private armed: { y: number; x: number; n: number } | null = null;
   private armedCleanup?: () => void;
+  private armedClue: ClueGroup | null = null;
+  private touchInterceptorTut = false;
+  private zoomOverlay?: Phaser.GameObjects.Container;
 
   private tileTex = '';
   private miniTex = '';
@@ -108,6 +111,9 @@ export class TutorialScene extends Phaser.Scene {
     this.misuseTaps = 0;
     this.armed = null;
     this.armedCleanup = undefined;
+    this.armedClue = null;
+    this.touchInterceptorTut = false;
+    this.zoomOverlay = undefined;
     this.clueGroups = [];
 
     this.tileTex = roundedTex(this, 80, 80, 16);
@@ -237,6 +243,20 @@ export class TutorialScene extends Phaser.Scene {
         const cell = this.board.cells[y][x];
         if (cell.value !== null) this.renderBig(y, x, cell.value, false);
         else for (const slot of this.candSlots(y, x)) if (cell.candidates.includes(slot.value)) this.makeChip(y, x, slot.value, slot.cx, slot.cy, slot.sub);
+        if (PORTRAIT) {
+          const { ox: cOx, oy: cOy } = this.cellOrigin(y, x);
+          const capturedY = y; const capturedX = x;
+          const cellHit = this.add.rectangle(
+            cOx + this.cellSide / 2, cOy + this.cellSide / 2,
+            this.cellSide, this.cellSide, 0, 0,
+          ).setDepth(8).setInteractive({ useHandCursor: true });
+          cellHit.on('pointerdown', () => {
+            if (this.busy || this.finished || this.popup || this.zoomOverlay) return;
+            const c = this.board.cells[capturedY][capturedX];
+            if (c.value !== null || c.candidates.length === 0) return;
+            this.openZoom(capturedY, capturedX);
+          });
+        }
       }
     }
   }
@@ -268,11 +288,14 @@ export class TutorialScene extends Phaser.Scene {
     const img = this.add.image(cx, cy, this.tileTex).setScale(base).setTint(color).setDepth(5);
     const outline = this.add.image(cx, cy, strokedRoundedTex(this, 80, 80, 16, 4)).setScale(base).setTint(0xffffff).setAlpha(0).setDepth(6);
     const txt = this.add.text(cx, cy, symbolFor(value), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff' }).setOrigin(0.5).setDepth(7);
-    img.setInteractive({ useHandCursor: true });
     const chip: Chip = { img, txt, outline, value, cx, cy, sub, base };
-    img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(chip, [value]); });
-    img.on('pointerout', () => this.hoverEnd());
-    img.on('pointerdown', (p: Phaser.Input.Pointer) => this.onDown(y, x, value, p));
+    // Portrait: cell-level hit handles taps; chips are visual only.
+    if (!PORTRAIT) {
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(chip, [value]); });
+      img.on('pointerout', () => this.hoverEnd());
+      img.on('pointerdown', (p: Phaser.Input.Pointer) => this.onDown(y, x, value, p));
+    }
     this.chips[y][x].set(value, chip);
   }
 
@@ -400,6 +423,22 @@ export class TutorialScene extends Phaser.Scene {
     this.hoverGroup = null;
   }
 
+  private tapClue(group: ClueGroup): void {
+    if (this.finished || group.dim) return;
+    if (this.armedClue && this.armedClue !== group) this.clearClueHighlight();
+    if (this.armedClue === group) { this.clearClueHighlight(); return; }
+    this.armedClue = group;
+    this.showTooltip(group);
+    this.hoverStart(group, group.minis.map((m) => m.value));
+  }
+
+  private clearClueHighlight(): void {
+    if (!this.armedClue) return;
+    if (this.hoverGroup === this.armedClue) this.hoverEnd();
+    this.hideTooltip();
+    this.armedClue = null;
+  }
+
   private showTooltip(group: ClueGroup): void {
     if (!settings.tooltips) return;
     this.hideTooltip();
@@ -445,9 +484,17 @@ export class TutorialScene extends Phaser.Scene {
         x += tk.w + gap;
       }
     });
-    let tx = group.gx - 14 - pw;
-    if (tx < 8) tx = group.gx + RULE_CELL * 3 + 14;
-    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + RULE_CELL / 2 - ph / 2));
+    // Static position: always in the "CLUES" header zone, overlapping the label.
+    let tx: number, ty: number;
+    if (PORTRAIT) {
+      tx = GAME.width / 2 - pw / 2;
+      ty = TUT_CLUES_TOP - 14 - ph; // just above the clues area
+    } else {
+      tx = CLUE_X + (PANEL - pw) / 2;
+      ty = 8; // top of right panel, covering the CLUES header
+    }
+    tx = Math.max(4, Math.min(GAME.width - pw - 4, tx));
+    ty = Math.max(4, Math.min(GAME.height - ph - 4, ty));
     this.tooltip = this.add.container(tx, ty, objs).setDepth(80);
   }
 
@@ -481,9 +528,11 @@ export class TutorialScene extends Phaser.Scene {
     const txt = this.add.text(cx, cy, symbolFor(n), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(28, Math.round(this.cellSide * 0.46))}px`, color: '#ffffff' }).setOrigin(0.5).setScale(animate ? 0.3 : 1).setDepth(7);
     const big: BigCell = { img, txt, outline, value: n, cx, cy, base };
     this.bigObjs[y][x] = big;
-    img.setInteractive({ useHandCursor: true });
-    img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(big, [n]); });
-    img.on('pointerout', () => this.hoverEnd());
+    if (!PORTRAIT) {
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerover', () => { if (!this.busy && !this.finished && !this.popup) this.hoverStart(big, [n]); });
+      img.on('pointerout', () => this.hoverEnd());
+    }
     if (animate) {
       this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
       this.tweens.add({ targets: txt, scaleX: 1, scaleY: 1, duration: 440, ease: 'Back.easeOut' });
@@ -518,13 +567,19 @@ export class TutorialScene extends Phaser.Scene {
       if (this.press && !this.press.fired) {
         const { y, x, n } = this.press;
         this.press.fired = true;
-        if (settings.touch) this.tapSelect(y, x, n);
-        else this.act(y, x, n, false);
+        this.act(y, x, n, false);
       }
       this.press = null;
       this.longPress?.remove();
       this.longPress = undefined;
     });
+    // Portrait: tap anywhere outside a chip/clue clears the clue highlight.
+    if (PORTRAIT) {
+      this.input.on('pointerdown', () => {
+        if (this.touchInterceptorTut) { this.touchInterceptorTut = false; return; }
+        this.clearClueHighlight();
+      });
+    }
   }
 
   private tapSelect(y: number, x: number, n: number): void {
@@ -591,6 +646,91 @@ export class TutorialScene extends Phaser.Scene {
     this.holdRing?.destroy(); this.holdRing = undefined;
   }
 
+  private openZoom(cellY: number, cellX: number): void {
+    if (this.zoomOverlay) return;
+    const cell = this.board.cells[cellY][cellX];
+    if (!cell || cell.value !== null) return;
+    const side = Math.round(SPAN * 0.76);
+    const cx = GAME.width / 2;
+    const cy = GAME.height / 2;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+    const backdrop = this.add.rectangle(cx, cy, GAME.width, GAME.height, 0x000000, 0.72).setInteractive();
+    backdrop.on('pointerdown', () => this.closeZoom());
+    objs.push(backdrop);
+    const panelTex = roundedTex(this, side, side, Math.round(side * 0.1));
+    const panel = this.add.image(cx, cy, panelTex).setTint(brighten(COLORS.bg, 18));
+    objs.push(panel);
+    const inset = Math.max(4, Math.floor(side / 22));
+    const avail = side - 2 * inset;
+    const sub = Math.floor(Math.min(avail / this.candCols, avail / this.candRows));
+    const baseX = cx - side / 2 + inset + Math.floor((avail - sub * this.candCols) / 2);
+    const baseY = cy - side / 2 + inset + Math.floor((avail - sub * this.candRows) / 2);
+    let zoomPressedV = -1;
+    let zoomPressFired = false;
+    let zoomRing: Phaser.GameObjects.Graphics | undefined;
+    let zoomRingTween: Phaser.Tweens.Tween | undefined;
+    const clearZoomPress = (): void => {
+      zoomRingTween?.stop(); zoomRingTween = undefined;
+      zoomRing?.destroy(); zoomRing = undefined;
+      zoomPressedV = -1; zoomPressFired = false;
+    };
+    for (let index = 0; index < this.size; index++) {
+      const v = (cellY + 1) * 10 + index + 1;
+      if (!cell.candidates.includes(v)) continue;
+      const dy = Math.floor(index / this.candCols);
+      const dx = index % this.candCols;
+      const inRow = Math.min(this.candCols, this.size - dy * this.candCols);
+      const rowOff = Math.floor(((this.candCols - inRow) * sub) / 2);
+      const chipCx = baseX + rowOff + dx * sub + sub / 2;
+      const chipCy = baseY + dy * sub + sub / 2;
+      const base = (sub - 3) / 80;
+      const color = rowColor(v);
+      const img = this.add.image(chipCx, chipCy, this.tileTex).setScale(base).setTint(color).setInteractive({ useHandCursor: true });
+      const txt = this.add.text(chipCx, chipCy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff' }).setOrigin(0.5);
+      img.on('pointerover', () => img.setTint(brighten(color, 56)));
+      img.on('pointerout', () => { img.setTint(color); if (zoomPressedV === v) clearZoomPress(); });
+      img.on('pointerdown', () => {
+        clearZoomPress();
+        zoomPressedV = v; zoomPressFired = false;
+        const gr = this.add.graphics().setDepth(65);
+        zoomRing = gr;
+        const r = Math.max(18, sub * 0.58);
+        zoomRingTween = this.tweens.addCounter({
+          from: 0, to: 1, duration: HOLD_MS, ease: 'Linear',
+          onUpdate: (tw) => {
+            const t = tw.getValue() ?? 0;
+            gr.clear();
+            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipCx, chipCy, r);
+            gr.lineStyle(5, 0xffe27a, 0.95); gr.beginPath();
+            gr.arc(chipCx, chipCy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
+          },
+          onComplete: () => { zoomPressFired = true; clearZoomPress(); this.closeZoom(false); this.act(cellY, cellX, v, true); },
+        });
+      });
+      img.on('pointerup', () => {
+        if (zoomPressedV === v && !zoomPressFired) { clearZoomPress(); this.closeZoom(false); this.act(cellY, cellX, v, false); }
+      });
+      objs.push(img, txt);
+    }
+    const container = this.add.container(0, 0, objs).setDepth(60).setAlpha(0);
+    const { ox, oy } = this.cellOrigin(cellY, cellX);
+    container.setX(ox + this.cellSide / 2 - cx).setY(oy + this.cellSide / 2 - cy).setScale(0.3);
+    this.tweens.add({ targets: container, x: 0, y: 0, scale: 1, alpha: 1, duration: 240, ease: 'Back.easeOut' });
+    this.zoomOverlay = container;
+  }
+
+  private closeZoom(animate = true): void {
+    if (!this.zoomOverlay) return;
+    const c = this.zoomOverlay;
+    this.zoomOverlay = undefined;
+    c.each((child: Phaser.GameObjects.GameObject) => { (child as Phaser.GameObjects.Image).disableInteractive?.(); });
+    if (animate) {
+      this.tweens.add({ targets: c, alpha: 0, scale: 0.85, duration: 160, ease: 'Quad.easeIn', onComplete: () => c.destroy() });
+    } else {
+      c.destroy();
+    }
+  }
+
   /** A board gesture during the tutorial. Enforces block-0's tap/hold split and
    *  scores mistakes in the logic blocks (port of presenter tutorial handlers). */
   private act(y: number, x: number, n: number, isDefine: boolean): void {
@@ -599,6 +739,7 @@ export class TutorialScene extends Phaser.Scene {
     if (cell.value !== null || !cell.candidates.includes(n)) return;
     this.hoverEnd();
     this.clearArmed();
+    this.clearClueHighlight();
     const lv = this.level;
 
     // block 0 gesture gating: the un-taught gesture is a silent no-op nudge —
@@ -733,13 +874,21 @@ export class TutorialScene extends Phaser.Scene {
     const group: ClueGroup = { objs, minis, rule, gx, gy, dim: false };
     this.clueGroups.push(group);
     const hit = this.add.rectangle(gx, gy, RULE_CELL * 3, RULE_CELL, 0xffffff, 0).setOrigin(0, 0).setInteractive({ useHandCursor: true });
-    hit.on('pointerover', () => { if (!this.popup) this.hoverStart(group, group.minis.map((m) => m.value)); });
-    hit.on('pointerout', () => { if (this.hoverGroup === group) this.hoverEnd(); });
+    hit.on('pointerover', () => {
+      if (PORTRAIT) return;
+      this.showTooltip(group);
+      if (this.popup || group.dim || this.armedClue === group) return;
+      this.hoverStart(group, group.minis.map((m) => m.value));
+    });
+    hit.on('pointerout', () => {
+      if (PORTRAIT) return;
+      this.hideTooltip();
+      if (this.armedClue === group) return;
+      if (this.hoverGroup === group) this.hoverEnd();
+    });
     hit.on('pointerdown', () => {
-      group.dim = !group.dim;
-      group.objs.forEach((o) => (o as Phaser.GameObjects.Image).setAlpha(group.dim ? 0.32 : 1));
-      for (const m of group.minis) { this.tweens.killTweensOf([m.img, m.outline, m.txt]); m.outline.setAlpha(0); m.img.setScale(m.scale).setTint(rowColor(m.value)); m.txt.setScale(1); }
-      if (group.dim && this.hoverGroup === group) this.hoverEnd();
+      if (PORTRAIT) this.touchInterceptorTut = true;
+      this.tapClue(group);
     });
   }
 

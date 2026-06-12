@@ -385,6 +385,22 @@ export class GameScene extends Phaser.Scene {
             if (cell.candidates.includes(slot.value)) this.makeChip(y, x, slot.value, slot.cx, slot.cy, slot.sub);
           }
         }
+        // Portrait: a transparent rectangle covering the whole cell opens zoom
+        // when tapped (collider on the full cell area, not just individual chips).
+        if (PORTRAIT) {
+          const { ox: cOx, oy: cOy } = this.cellOrigin(y, x);
+          const capturedY = y; const capturedX = x;
+          const cellHit = this.add.rectangle(
+            cOx + this.cellSide / 2, cOy + this.cellSide / 2,
+            this.cellSide, this.cellSide, 0, 0,
+          ).setDepth(8).setInteractive({ useHandCursor: true });
+          cellHit.on('pointerdown', () => {
+            if (this.busy || this.gameOver || this.zoomOverlay) return;
+            const c = this.board.cells[capturedY][capturedX];
+            if (c.value !== null || c.candidates.length === 0) return;
+            this.openZoom(capturedY, capturedX);
+          });
+        }
       }
     }
   }
@@ -453,15 +469,19 @@ export class GameScene extends Phaser.Scene {
         fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff',
       })
       .setOrigin(0.5).setDepth(7);
-    img.setInteractive({ useHandCursor: true });
 
     const chip: Chip = { img, txt, outline, value, cx, cy, sub, base };
-    img.on('pointerover', () => {
-      if (this.busy || this.gameOver) return;
-      this.hoverStart(chip, [value], { liftChip: chip });
-    });
-    img.on('pointerout', () => { if (this.hoverSource === chip) this.hoverEnd(); });
-    img.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
+
+    // Portrait: the whole-cell hit rectangle handles taps; chips are visual only.
+    if (!PORTRAIT) {
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerover', () => {
+        if (this.busy || this.gameOver) return;
+        this.hoverStart(chip, [value], { liftChip: chip });
+      });
+      img.on('pointerout', () => { if (this.hoverSource === chip) this.hoverEnd(); });
+      img.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onChipDown(y, x, value, pointer));
+    }
 
     this.chips[y][x].set(value, chip);
   }
@@ -658,19 +678,14 @@ export class GameScene extends Phaser.Scene {
 
     const big: BigCell = { img, txt, outline, value: n, cx, cy, base };
     this.bigObjs[y][x] = big;
-    img.setInteractive({ useHandCursor: true });
-    img.on('pointerover', () => {
-      if (this.busy || this.gameOver) return;
-      this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
-    });
-    img.on('pointerout', () => { if (this.hoverSource === big) this.hoverEnd(); });
-    img.on('pointerdown', () => {
-      if (!settings.touch || this.busy || this.gameOver) return;
-      this.touchInterceptor = true;
-      this.clearArmed();
-      this.clearClueHighlight();
-      this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
-    });
+    if (!PORTRAIT) {
+      img.setInteractive({ useHandCursor: true });
+      img.on('pointerover', () => {
+        if (this.busy || this.gameOver) return;
+        this.hoverStart(big, [n], { glowNow: [this.bigGlow(big)] });
+      });
+      img.on('pointerout', () => { if (this.hoverSource === big) this.hoverEnd(); });
+    }
 
     if (animate) {
       this.tweens.add({ targets: [img, outline], scaleX: base, scaleY: base, duration: 440, ease: 'Back.easeOut' });
@@ -1216,29 +1231,28 @@ export class GameScene extends Phaser.Scene {
     // gate it off and drive everything from the tap instead — 1st tap lights the
     // board, 2nd tap on the same clue crosses it out. No "tap again" prompt.
     hit.on('pointerover', () => {
-      if (settings.touch) return;
+      if (PORTRAIT) return; // touch — no mouse hover
       this.showTooltip(group);
-      if (this.gameOver || group.dim) return;
+      if (this.gameOver || group.dim || this.armedClue === group) return;
       this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
     });
     hit.on('pointerout', () => {
-      if (settings.touch) return;
+      if (PORTRAIT) return;
       this.hideTooltip();
+      if (this.armedClue === group) return; // keep highlight when clue is armed
       if (this.hoverSource === group) this.hoverEnd();
     });
     hit.on('pointerdown', () => {
-      if (settings.touch) { this.touchInterceptor = true; this.tapClue(group); return; }
-      if (group.dim) this.undimGroup(group);
-      else this.dimGroup(group);
+      if (PORTRAIT) this.touchInterceptor = true;
+      this.tapClue(group);
     });
   }
 
-  /** Touch tap on a clue: 1st tap → cross-highlight its values on the board;
-   *  2nd tap on the same clue → clear the highlight (not dim). Tapping a dimmed
-   *  clue undims it. Tapping a different clue moves the highlight there. */
+  /** Tap/click a clue: 1st tap highlights its values on the board (armed);
+   *  2nd tap clears the highlight. A dimmed clue can't be armed. */
   private tapClue(group: ClueGroup): void {
     if (this.gameOver) return;
-    if (group.dim) { this.undimGroup(group); return; }
+    if (group.dim) return;
     if (this.armedClue && this.armedClue !== group) this.clearClueHighlight();
     if (this.armedClue === group) { this.clearClueHighlight(); return; }
     this.clearArmed();
@@ -1347,9 +1361,17 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    let tx = group.gx - 14 - pw;
-    if (tx < 8) tx = group.gx + group.cellSize * 3 + 14;
-    const ty = Math.max(8, Math.min(GAME.height - ph - 8, group.gy + group.cellSize / 2 - ph / 2));
+    // Static position: always in the "CLUES" header zone, overlapping the label.
+    let tx: number, ty: number;
+    if (PORTRAIT) {
+      tx = GAME.width / 2 - pw / 2;
+      ty = CLUES_TOP_Y - 14 - ph; // just above the clues area divider
+    } else {
+      tx = CLUE_X + (PANEL - pw) / 2;
+      ty = 8; // top of right panel, covering the CLUES header
+    }
+    tx = Math.max(4, Math.min(GAME.width - pw - 4, tx));
+    ty = Math.max(4, Math.min(GAME.height - ph - 4, ty));
     this.tooltip = this.add.container(tx, ty, objs).setDepth(80);
   }
 
@@ -1529,10 +1551,41 @@ export class GameScene extends Phaser.Scene {
         fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff',
       }).setOrigin(0.5);
       img.on('pointerover', () => img.setTint(brighten(color, 56)));
-      img.on('pointerout', () => img.setTint(color));
-      img.on('pointerdown', () => { this.closeZoom(false); this.doAction(cellY, cellX, v, false); });
+      img.on('pointerout', () => { img.setTint(color); if (zoomPressedV === v) clearZoomPress(); });
+      img.on('pointerdown', () => {
+        clearZoomPress();
+        zoomPressedV = v; zoomPressFired = false;
+        const gr = this.add.graphics().setDepth(65);
+        zoomRing = gr;
+        const r = Math.max(18, sub * 0.58);
+        zoomRingTween = this.tweens.addCounter({
+          from: 0, to: 1, duration: HOLD_MS, ease: 'Linear',
+          onUpdate: (tw) => {
+            const t = tw.getValue() ?? 0;
+            gr.clear();
+            gr.lineStyle(5, 0x000000, 0.35); gr.strokeCircle(chipCx, chipCy, r);
+            gr.lineStyle(5, 0xffe27a, 0.95); gr.beginPath();
+            gr.arc(chipCx, chipCy, r, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2, false); gr.strokePath();
+          },
+          onComplete: () => { zoomPressFired = true; clearZoomPress(); this.closeZoom(false); this.doAction(cellY, cellX, v, true); },
+        });
+      });
+      img.on('pointerup', () => {
+        if (zoomPressedV === v && !zoomPressFired) { clearZoomPress(); this.closeZoom(false); this.doAction(cellY, cellX, v, false); }
+      });
       objs.push(img, txt);
     }
+
+    // Hold-to-define state shared across all chip handlers in this zoom session.
+    let zoomPressedV = -1;
+    let zoomPressFired = false;
+    let zoomRing: Phaser.GameObjects.Graphics | undefined;
+    let zoomRingTween: Phaser.Tweens.Tween | undefined;
+    const clearZoomPress = (): void => {
+      zoomRingTween?.stop(); zoomRingTween = undefined;
+      zoomRing?.destroy(); zoomRing = undefined;
+      zoomPressedV = -1; zoomPressFired = false;
+    };
 
     const container = this.add.container(0, 0, objs).setDepth(60).setAlpha(0);
     // scale-in entrance from the tapped cell
@@ -1561,7 +1614,7 @@ export class GameScene extends Phaser.Scene {
 
   private showEndPanel(won: boolean): void {
     const hasBadges = won && this.freshBadges.length > 0;
-    const showCopy = won && !this.zen && !this.isRetry;
+    const showCopy = false;
     const bestLine = won
       ? this.zen
         ? 'Zen — not recorded'

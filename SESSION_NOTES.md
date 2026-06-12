@@ -1,6 +1,19 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-06-01**.
+Quick context for resuming work. Latest session: **2026-06-12**.
+
+## 2026-06-12 — Phaser: mobile UX + clue/tooltip redesign
+
+1. **Copy result removed** — "Copy result" button gone from the win panel.
+2. **7×7 removed from Progress** — `SIZES = [4,5,6]` in statsOverlay; portrait row count updated; 7×7 stays accessible via the `7` keyboard shortcut in-game.
+3. **Tap-to-select removed from menu** — toggle removed from both portrait and landscape options panel. Default `touch` is now `false`.
+4. **PORTRAIT: full-cell collider** — `buildBoard` adds a transparent depth-8 rectangle per candidate cell; tapping anywhere in the cell opens zoom. Chips and big cells are visual-only in portrait (no chip-level interactive).
+5. **Hold-to-define in zoom** — candidates inside the zoom overlay support long-press (HOLD_MS) to define; tap still pops. A radial fill ring shows progress.
+6. **Tooltip static in clue header** — tooltip no longer floats beside the hovered clue. It now appears at a fixed position in the "CLUES" header zone (top of right panel landscape; just above clues area portrait), overlapping the label so it's always visible.
+7. **Clue click = highlight only** — clicking a clue no longer dims/undims it. All modes (mouse + touch) use `tapClue`: 1st click arms highlight, 2nd click clears. Auto-dim from solved clues still works. Mouse: armed highlight persists after mouse moves away.
+8. **Tutorial parity** — all above behaviors (zoom + cell-level collider, static tooltip, highlight-only clue click + tapClue, armed clue) ported to TutorialScene for all blocks.
+
+Verified: typecheck clean, build green (~380 KB gz), smoke 360/360 failures=0.
 
 ## 2026-06-01 — Phaser: mobile sizing + hint/particle/lock-notice fixes
 

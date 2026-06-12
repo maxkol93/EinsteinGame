@@ -29,7 +29,7 @@ interface SettingsData {
 
 const DEFAULTS: SettingsData = {
   unlock_all: false, zen: false, tutorial_blocks: 0,
-  tooltips: true, touch: PORTRAIT, reduce_motion: false,
+  tooltips: true, touch: false, reduce_motion: false,
 };
 
 class Settings {
