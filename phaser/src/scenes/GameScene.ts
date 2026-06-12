@@ -287,9 +287,9 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Mode label sits at the very top of the left panel, above MENU
-    this.add.text(PANEL / 2, 15, modeLabel, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
-    makeButton(this, PANEL / 2, 46, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
+    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
+    // Mode label sits just below the MENU button
+    this.add.text(PANEL / 2, 80, modeLabel, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
 
     this.add.text(PANEL / 2, 120, 'T I M E', { fontFamily: FONT, fontSize: '14px', color: palette.accent }).setOrigin(0.5);
     this.timerText = this.add
