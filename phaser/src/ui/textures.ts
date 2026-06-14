@@ -122,6 +122,27 @@ export function bigCellTex(scene: Phaser.Scene, color: number, w = 160, h = 160,
   return key;
 }
 
+// A radial vignette: transparent at the centre, darkening towards the edges.
+// Used in clue-focus mode to draw the eye to the lit clue + matched cells.
+export function vignetteTex(scene: Phaser.Scene, w: number, h: number): string {
+  const key = `vignette_${w}x${h}`;
+  if (scene.textures.exists(key)) return key;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d')!;
+  const cx = w / 2, cy = h / 2;
+  const inner = Math.min(w, h) * 0.34;
+  const outer = Math.hypot(w, h) * 0.62;
+  const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(0.7, 'rgba(0,0,0,0.30)');
+  g.addColorStop(1, 'rgba(0,0,0,0.78)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  scene.textures.addCanvas(key, c);
+  return key;
+}
+
 // A 16px soft shadow strip a side panel casts onto the board (window.py
 // _make_shadow_strip). Alpha fades from the panel edge to nothing.
 export function shadowStripTex(

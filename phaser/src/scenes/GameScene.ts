@@ -2,10 +2,10 @@ import Phaser from 'phaser';
 import { COLORS, GAME, FONT, palette, rowColor, brighten, applyRenderScale } from '../config';
 import { generatePuzzle, FieldAndRules, COMPLEXITY } from '../model/fieldAndRules';
 import { PuzzleBoard, ChangeSet } from '../model/board';
-import { symbolFor, ruleSegments } from '../model/decoder';
+import { symbolFor, glyphOriginY, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton, BtnHandle } from '../ui/button';
-import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex } from '../ui/textures';
+import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex, vignetteTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 import { audio } from '../audio/sound';
 import { stats, parTime } from '../model/stats';
@@ -138,8 +138,11 @@ export class GameScene extends Phaser.Scene {
   private zoomBackdrop?: Phaser.GameObjects.Rectangle;
   private remainingText?: Phaser.GameObjects.Text;
   private touchInterceptor = false;
+  private menuBtn?: BtnHandle;
+  private cellHits: Phaser.GameObjects.Rectangle[][] = [];
   private focusedClue: ClueGroup | null = null;
   private focusOverlay?: Phaser.GameObjects.Rectangle;
+  private focusVignette?: Phaser.GameObjects.Image;
   private clueTypeIndicator?: { bg: Phaser.GameObjects.Image; txt: Phaser.GameObjects.Text };
 
   constructor() {
@@ -176,7 +179,9 @@ export class GameScene extends Phaser.Scene {
     this.touchInterceptor = false;
     this.focusedClue = null;
     this.focusOverlay = undefined;
+    this.focusVignette = undefined;
     this.clueTypeIndicator = undefined;
+    this.cellHits = [];
   }
 
   create(): void {
@@ -275,7 +280,7 @@ export class GameScene extends Phaser.Scene {
 
     if (PORTRAIT) {
       // a horizontal top strip: MENU | TIME | HINT, then lives/zen + mode below
-      makeButton(this, 96, 36, 156, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
+      this.menuBtn = makeButton(this, 96, 36, 156, 46, '☰  MENU', () => this.toMenu(), { fontSize: 18 });
       this.hintBtn = makeButton(this, GAME.width - 96, 36, 156, 46, 'HINT', () => this.hint(), { fontSize: 18, fill: brighten(COLORS.panel, 44) });
       this.timerText = this.add.text(GAME.width / 2, 36, '00:00', { fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: palette.text }).setOrigin(0.5);
       if (this.zen) {
@@ -293,7 +298,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
+    this.menuBtn = makeButton(this, PANEL / 2, 42, PANEL - 60, 48, '☰  MENU', () => this.toMenu(), { fontSize: 19 });
     // Mode label sits just below the MENU button
     this.add.text(PANEL / 2, 80, modeLabel, { fontFamily: FONT, fontSize: '12px', color: palette.accent }).setOrigin(0.5);
 
@@ -369,6 +374,7 @@ export class GameScene extends Phaser.Scene {
   private buildBoard(): void {
     this.chips = [];
     this.bigObjs = [];
+    this.cellHits = [];
     // A faint ghost plate behind every cell so the grid reads even when a cell
     // is empty (window.py draws a rounded fill of brighten(bg, 14) per cell).
     const plateTex = roundedTex(this, this.cellSide, this.cellSide, Math.max(8, Math.round(this.cellSide * 0.11)));
@@ -376,6 +382,7 @@ export class GameScene extends Phaser.Scene {
     for (let y = 0; y < this.size; y++) {
       this.chips.push([]);
       this.bigObjs.push([]);
+      this.cellHits.push([]);
       for (let x = 0; x < this.size; x++) {
         this.chips[y].push(new Map());
         this.bigObjs[y].push(null);
@@ -406,6 +413,9 @@ export class GameScene extends Phaser.Scene {
             if (c.value !== null || c.candidates.length === 0) return;
             this.openZoom(capturedY, capturedX);
           });
+          this.cellHits[y].push(cellHit);
+        } else {
+          this.cellHits[y].push(null!);
         }
       }
     }
@@ -474,7 +484,7 @@ export class GameScene extends Phaser.Scene {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(11, Math.round(sub * 0.5))}px`, color: '#ffffff',
       })
-      .setOrigin(0.5).setDepth(7);
+      .setOrigin(0.5, glyphOriginY(value)).setDepth(7);
 
     const chip: Chip = { img, txt, outline, value, cx, cy, sub, base };
 
@@ -523,6 +533,7 @@ export class GameScene extends Phaser.Scene {
     }
     for (const group of this.clueGroups) {
       if (group.dim) continue; // crossed-out clue never highlights
+      if (this.focusedClue && group !== this.focusedClue) continue; // dimmed in focus
       for (const m of group.minis) if (set.has(m.value)) out.push(this.clueGlow(m));
     }
     return out;
@@ -678,7 +689,7 @@ export class GameScene extends Phaser.Scene {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(28, Math.round(this.cellSide * 0.46))}px`, color: '#ffffff',
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, glyphOriginY(n))
       .setScale(animate ? 0.3 : 1)
       .setDepth(7);
 
@@ -719,6 +730,7 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointerdown', () => {
       if (!settings.touch) return;
       if (this.touchInterceptor) { this.touchInterceptor = false; return; }
+      if (this.focusedClue) return; // focus persists until the clue is tapped again
       this.clearArmed();
       this.clearClueHighlight();
     });
@@ -820,8 +832,7 @@ export class GameScene extends Phaser.Scene {
     this.clearHint(); // any move dismisses the hint highlight
     this.resetIdle(); // a move restarts the idle-hint countdown
     this.hoverEnd(); // drop any highlight before the board mutates
-    this.exitClueFocus(); // exit focus mode on board interaction
-    this.clearClueHighlight(); // and any touch clue highlight
+    if (!this.focusedClue) this.clearClueHighlight(); // keep focus through a matched-cell pop
     const correct = this.board.isAnswer(y, x, n);
     if (isDefine ? !correct : correct) {
       this.registerWrong(y, x, n);
@@ -880,10 +891,13 @@ export class GameScene extends Phaser.Scene {
       this.time.delayedCall(maxStep * STEP_MS + 420, () => {
         this.busy = false;
         this.refreshHover();
+        this.refreshFocus();
         if (!this.gameOver && this.board.isWon) this.finish(true);
       });
     } else if (this.board.isWon) {
       this.finish(true);
+    } else {
+      this.refreshFocus();
     }
   }
 
@@ -1149,11 +1163,23 @@ export class GameScene extends Phaser.Scene {
       return 3; // triple (all-number)
     };
     const rules = [...this.model.displayableRules].sort((a, b) => rank(a) - rank(b));
-    const ruleW = RULE_CELL * 3;
+
+    // Lay the panel out as a list of "items": each clue, plus a separator slot
+    // inserted wherever the clue type changes. A separator occupies a full clue
+    // row (so the vertical step never breaks) but only draws a thin line.
+    type Item = { rule: Rule } | { sep: true };
+    const items: Item[] = [];
+    let prevRank = -1;
+    for (const rule of rules) {
+      const rk = rank(rule);
+      if (prevRank !== -1 && rk !== prevRank) items.push({ sep: true });
+      items.push({ rule });
+      prevRank = rk;
+    }
 
     if (PORTRAIT) {
       // clues spread below the board in as many columns as fit the full width;
-      // if all rules don't fit at the default tile size, shrink until they do.
+      // if all items don't fit at the default tile size, shrink until they do.
       this.add.text(GAME.width / 2, CLUES_TOP_Y - 2, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '18px', color: palette.text }).setOrigin(0.5);
       const colGap = 18;
       const top = CLUES_TOP_Y + 24;
@@ -1162,7 +1188,7 @@ export class GameScene extends Phaser.Scene {
       for (;;) {
         const rw = ruleCell * 3;
         const c = Math.max(1, Math.floor((GAME.width - 2 * MARGIN + colGap) / (rw + colGap)));
-        if (Math.ceil(rules.length / c) * (ruleCell + 10) <= availH || ruleCell <= 28) break;
+        if (Math.ceil(items.length / c) * (ruleCell + 10) <= availH || ruleCell <= 28) break;
         ruleCell -= 2;
       }
       const pRuleW = ruleCell * 3;
@@ -1170,54 +1196,63 @@ export class GameScene extends Phaser.Scene {
       const rowH = ruleCell + 10;
       const totalW = cols * pRuleW + (cols - 1) * colGap;
       const startX = (GAME.width - totalW) / 2;
-      const perCol = Math.ceil(rules.length / cols);
-      rules.forEach((rule, i) => {
+      const perCol = Math.ceil(items.length / cols);
+      items.forEach((it, i) => {
         const tx = Math.floor(i / perCol);
         const ty = i % perCol;
         const gx = startX + tx * (pRuleW + colGap);
         const gy = top + ty * rowH;
-        this.makeClueGroup(rule, gx, gy, ruleCell);
+        if ('sep' in it) this.makeClueSeparator(gx, gy, pRuleW, ruleCell);
+        else this.makeClueGroup(it.rule, gx, gy, ruleCell);
       });
       return;
     }
 
-    const rightPanelW = GAME.width - CLUE_X;
+    // Desktop: centre the clue block in the region between the board's right
+    // edge and the window border, so the gap from the board equals the gap from
+    // the border (equal left/right padding).
+    const regionL = BX + SPAN;
+    const regionW = GAME.width - regionL;
     this.add
-      .text(CLUE_X + rightPanelW / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
+      .text(regionL + regionW / 2, 24, 'C L U E S', { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: palette.text })
       .setOrigin(0.5);
     const colGap = 14;
     const availH = GAME.height - RULES_TOP - 8;
 
-    // Auto-size: start at default RULE_CELL, shrink if rules don't fit in 2 cols.
-    // If still too many for 2 cols at minimum size, allow a 3rd column (shrinking
-    // further until 3 columns fit within the right panel width).
+    // Auto-size: shrink the tile to fit 2 columns; if still too many, allow a
+    // 3rd column (shrinking further until 3 columns fit the region).
     let ruleCell = RULE_CELL;
     const perColAt = (rc: number): number => Math.max(1, Math.floor(availH / (rc + 9)));
-    const numColsNeeded = (rc: number): number => Math.ceil(rules.length / perColAt(rc));
-    // Try shrinking to fit in 2 columns
+    const numColsNeeded = (rc: number): number => Math.ceil(items.length / perColAt(rc));
     while (ruleCell > 24 && numColsNeeded(ruleCell) > 2) ruleCell -= 2;
-    // If still > 2 cols needed, allow 3 and resize to fit panel width
     let numCols = numColsNeeded(ruleCell);
     if (numCols > 2) {
       numCols = 3;
-      // Shrink until 3 cols fit horizontally
-      while (ruleCell > 24 && 3 * ruleCell * 3 + 2 * colGap > rightPanelW) ruleCell--;
-      // Also shrink if rows don't fit vertically
-      const perCol3 = Math.ceil(rules.length / numCols);
+      while (ruleCell > 24 && 3 * ruleCell * 3 + 2 * colGap > regionW) ruleCell--;
+      const perCol3 = Math.ceil(items.length / numCols);
       while (ruleCell > 24 && perCol3 * (ruleCell + 9) > availH) ruleCell--;
     }
 
     const finalRuleW = ruleCell * 3;
     const totalW = numCols * finalRuleW + (numCols - 1) * colGap;
-    const padX = Math.round((rightPanelW - totalW) / 2);
-    const perCol = Math.ceil(rules.length / numCols);
-    rules.forEach((rule, i) => {
+    const startX = regionL + (regionW - totalW) / 2;
+    const perCol = Math.ceil(items.length / numCols);
+    items.forEach((it, i) => {
       const ty = i % perCol;
       const tx = Math.floor(i / perCol);
-      const gx = CLUE_X + padX + tx * (finalRuleW + colGap);
+      const gx = startX + tx * (finalRuleW + colGap);
       const gy = RULES_TOP + ty * (ruleCell + 9);
-      this.makeClueGroup(rule, gx, gy, ruleCell);
+      if ('sep' in it) this.makeClueSeparator(gx, gy, finalRuleW, ruleCell);
+      else this.makeClueGroup(it.rule, gx, gy, ruleCell);
     });
+  }
+
+  /** A thin horizontal divider occupying one clue-row slot, drawn centred in
+   *  the slot so the row step stays uniform. */
+  private makeClueSeparator(gx: number, gy: number, w: number, cellSize: number): void {
+    this.add
+      .rectangle(gx, gy + cellSize / 2, w, 2, brighten(COLORS.panel, 34), 0.55)
+      .setOrigin(0, 0.5);
   }
 
   private makeClueGroup(rule: Rule, gx: number, gy: number, cellSize = RULE_CELL): void {
@@ -1237,7 +1272,7 @@ export class GameScene extends Phaser.Scene {
           .setScale(miniScale).setTint(0xffffff).setAlpha(0);
         const t = this.add
           .text(sx, sy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: valFontSize, color: '#ffffff' })
-          .setOrigin(0.5);
+          .setOrigin(0.5, glyphOriginY(v));
         // outline is NOT in objs — the dim pass must not leave it visible at
         // 0.32; it's controlled only via glow/dimGroup.
         objs.push(img, t);
@@ -1268,12 +1303,16 @@ export class GameScene extends Phaser.Scene {
       // Desktop: hover highlights board cells; click enters/exits focus mode.
       hit.on('pointerover', () => {
         if (this.gameOver || group.dim) return;
+        // In focus mode only the focused clue reacts to the pointer.
+        if (this.focusedClue && this.focusedClue !== group) return;
         this.showClueTypeIndicator(group.rule);
         this.showTooltip(group);
         this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
       });
       hit.on('pointerout', () => {
-        if (!this.focusedClue) this.hideClueTypeIndicator();
+        // Keep the focused clue lit even when the pointer leaves it.
+        if (this.focusedClue === group) { this.hideTooltip(); return; }
+        this.hideClueTypeIndicator();
         this.hideTooltip();
         if (this.hoverSource === group) this.hoverEnd();
       });
@@ -1413,7 +1452,7 @@ export class GameScene extends Phaser.Scene {
         if (tk.kind === 'cell') {
           const v = tk.val as number;
           objs.push(this.add.image(x + tile / 2, cy, MINI).setDisplaySize(tile, tile).setTint(rowColor(v)));
-          objs.push(this.add.text(x + tile / 2, cy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: '#ffffff' }).setOrigin(0.5));
+          objs.push(this.add.text(x + tile / 2, cy, symbolFor(v), { fontFamily: FONT, fontStyle: 'bold', fontSize: '15px', color: '#ffffff' }).setOrigin(0.5, glyphOriginY(v)));
         } else {
           objs.push(this.add.text(x, cy, tk.val as string, { fontFamily: FONT, fontSize: `${fontSize}px`, color: palette.text }).setOrigin(0, 0.5));
         }
@@ -1480,65 +1519,137 @@ export class GameScene extends Phaser.Scene {
 
   // --------------------------- clue focus mode ---------------------------
 
-  /** Lock-mode: overlay dims the board + other clues; only the focused clue and
-   *  its board values stay fully visible. PC: click clue to enter, click again to
-   *  exit. Mobile: 2nd tap enters, 3rd tap exits. */
+  // Focus mode dims everything except the focused clue and its matched cells,
+  // which stay fully interactive (hover/lift/pop/hold). A soft dim overlay +
+  // radial vignette + a one-shot pop fade it in. Non-matched chips/clues are
+  // dimmed by alpha and deactivated; the menu button stays lit and active.
+  private static readonly FOCUS_DIM = 0.18;
+  private static readonly FOCUS_DEPTH = 12; // focused clue + lit content sit here
+  private static readonly OVERLAY_DEPTH = 4; // above background, below chips
+
+  /** Lock-mode: PC click clue to enter, click again to exit. Mobile: 2nd tap
+   *  enters, 3rd tap exits. */
   private enterClueFocus(group: ClueGroup): void {
-    this.exitClueFocus();
+    if (this.focusedClue) this.exitClueFocus();
+    if (group.dim) return;
     this.focusedClue = group;
+    this.armedClue = null; // focus supersedes the mobile "armed" state
 
+    // A flat dim over the whole scene (background/panels) + a radial vignette,
+    // both below the chips so lit content isn't darkened by them.
     const ov = this.add
-      .rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0.52)
-      .setInteractive()
-      .setDepth(38);
+      .rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0)
+      .setDepth(GameScene.OVERLAY_DEPTH);
     this.focusOverlay = ov;
+    const vig = this.add
+      .image(GAME.width / 2, GAME.height / 2, vignetteTex(this, GAME.width, GAME.height))
+      .setDisplaySize(GAME.width, GAME.height)
+      .setAlpha(0)
+      .setDepth(GameScene.OVERLAY_DEPTH);
+    this.focusVignette = vig;
+    this.tweens.add({ targets: ov, fillAlpha: 0.5, duration: 240, ease: 'Quad.easeOut' });
+    this.tweens.add({ targets: vig, alpha: 1, duration: 280, ease: 'Quad.easeOut' });
 
-    // Clue visuals + hit area above overlay
-    for (const o of group.objs) (o as Phaser.GameObjects.Image).setDepth(45);
-    group.hit.setDepth(46);
+    // Keep the menu button lit + clickable above the dim.
+    this.menuBtn?.root.setDepth(96);
 
-    // Matched board cells above overlay
-    const values = new Set(group.minis.map((m) => m.value));
+    this.applyFocusVisuals(group, true);
+    this.showClueTypeIndicator(group.rule);
+
+    // A gentle one-shot emphasis pop on the focused clue.
+    const pop = group.objs.filter((o) => o.active);
+    this.tweens.add({ targets: pop, scaleX: 1.07, scaleY: 1.07, duration: 150, yoyo: true, ease: 'Sine.easeOut' });
+  }
+
+  /** Set alpha / interactivity / depth on every board chip and clue to reflect
+   *  the focus on `group`: matched stay bright + active, the rest dim + inert. */
+  private applyFocusVisuals(group: ClueGroup, animate: boolean): void {
+    const set = new Set(group.minis.map((m) => m.value));
+    const dim = GameScene.FOCUS_DIM;
+    const setAlpha = (objs: Phaser.GameObjects.GameObject[], a: number): void => {
+      for (const o of objs) {
+        if (!o.active) continue;
+        if (animate) this.tweens.add({ targets: o, alpha: a, duration: 220, ease: 'Quad.easeOut' });
+        else (o as Phaser.GameObjects.Image).setAlpha(a);
+      }
+    };
+
     for (let y = 0; y < this.size; y++) {
       for (let x = 0; x < this.size; x++) {
         for (const [v, chip] of this.chips[y][x]) {
-          if (values.has(v)) { chip.img.setDepth(42); chip.txt.setDepth(44); chip.outline.setDepth(43); }
+          const on = set.has(v);
+          if (chip.img.input) chip.img.input.enabled = on;
+          setAlpha([chip.img, chip.txt], on ? 1 : dim);
         }
         const big = this.bigObjs[y][x];
-        if (big && values.has(big.value)) { big.img.setDepth(42); big.txt.setDepth(44); big.outline.setDepth(43); }
+        if (big) {
+          const on = set.has(big.value);
+          if (big.img.input) big.img.input.enabled = on;
+          setAlpha([big.img, big.txt], on ? 1 : dim);
+        }
+        const rect = this.cellHits[y]?.[x];
+        if (rect?.input) {
+          const cell = this.board.cells[y][x];
+          rect.input.enabled = (cell.value !== null && set.has(cell.value)) || cell.candidates.some((c) => set.has(c));
+        }
       }
     }
 
-    // Show type indicator if not already showing
-    this.showClueTypeIndicator(group.rule);
+    for (const grp of this.clueGroups) {
+      const focused = grp === group;
+      if (grp.hit.input) grp.hit.input.enabled = focused;
+      // raise above the dim so depth is consistent (focused bright, rest dimmed)
+      for (const o of grp.objs) (o as Phaser.GameObjects.Image).setDepth(GameScene.FOCUS_DEPTH);
+      for (const m of grp.minis) m.outline.setDepth(GameScene.FOCUS_DEPTH);
+      setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.32 : dim);
+    }
+  }
+
+  /** Re-apply the focus visuals after a board change (new big cells from a
+   *  cascade need dimming too); auto-exit if the focused clue got solved. */
+  private refreshFocus(): void {
+    if (!this.focusedClue) return;
+    if (this.focusedClue.dim) { this.exitClueFocus(); return; }
+    this.applyFocusVisuals(this.focusedClue, false);
+    this.showClueTypeIndicator(this.focusedClue.rule);
   }
 
   private exitClueFocus(): void {
     if (!this.focusedClue) return;
-    const group = this.focusedClue;
     this.focusedClue = null;
 
     this.focusOverlay?.destroy();
     this.focusOverlay = undefined;
+    this.focusVignette?.destroy();
+    this.focusVignette = undefined;
+    this.menuBtn?.root.setDepth(0);
 
-    // Restore clue object depths
-    for (const o of group.objs) (o as Phaser.GameObjects.Image).setDepth(0);
-    group.hit.setDepth(0);
-
-    // Restore chip/bigcell depths
-    const values = new Set(group.minis.map((m) => m.value));
+    // Restore every chip / big cell to full alpha + interactive.
     for (let y = 0; y < this.size; y++) {
       for (let x = 0; x < this.size; x++) {
-        for (const [v, chip] of this.chips[y][x]) {
-          if (values.has(v) && chip.img.active) {
-            chip.img.setDepth(5); chip.txt.setDepth(7); chip.outline.setDepth(6);
-          }
+        for (const [, chip] of this.chips[y][x]) {
+          if (!chip.img.active) continue;
+          this.tweens.killTweensOf([chip.img, chip.txt]);
+          chip.img.setAlpha(1); chip.txt.setAlpha(1);
+          if (chip.img.input) chip.img.input.enabled = true;
         }
         const big = this.bigObjs[y][x];
-        if (big && values.has(big.value) && big.img.active) {
-          big.img.setDepth(5); big.txt.setDepth(7); big.outline.setDepth(6);
+        if (big?.img.active) {
+          this.tweens.killTweensOf([big.img, big.txt]);
+          big.img.setAlpha(1); big.txt.setAlpha(1);
+          if (big.img.input) big.img.input.enabled = true;
         }
+        const rect = this.cellHits[y]?.[x];
+        if (rect?.input) rect.input.enabled = true;
       }
+    }
+
+    // Restore clue depths + alpha (auto-dimmed clues keep their 0.32).
+    for (const grp of this.clueGroups) {
+      this.tweens.killTweensOf(grp.objs);
+      for (const o of grp.objs) (o as Phaser.GameObjects.Image).setDepth(0).setAlpha(grp.dim ? 0.32 : 1);
+      for (const m of grp.minis) m.outline.setDepth(0);
+      if (grp.hit.input) grp.hit.input.enabled = true;
     }
 
     this.hideClueTypeIndicator();
@@ -1733,7 +1844,7 @@ export class GameScene extends Phaser.Scene {
       const txt = this.add.text(chipLx, chipLy, symbolFor(v), {
         fontFamily: FONT, fontStyle: 'bold',
         fontSize: `${Math.max(13, Math.round(sub * 0.5))}px`, color: '#ffffff',
-      }).setOrigin(0.5);
+      }).setOrigin(0.5, glyphOriginY(v));
       img.on('pointerover', () => img.setTint(brighten(color, 56)));
       img.on('pointerout', () => { img.setTint(color); if (zoomPressedV === v) clearZoomPress(); });
       img.on('pointerdown', () => {
