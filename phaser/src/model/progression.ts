@@ -12,6 +12,9 @@ import { Stats, SIZES } from './stats';
 
 export const UNLOCK_THRESHOLD = 3;
 
+// 7×7 is a hidden bonus mode — it must not gate difficulty unlocks.
+const DIFF_UNLOCK_SIZES = [4, 5, 6] as const;
+
 export function sizeUnlocked(stats: Stats, difficulty: number, size: number, unlockAll: boolean): boolean {
   if (unlockAll) return true;
   if (size === 4) return true;
@@ -22,7 +25,7 @@ export function sizeUnlocked(stats: Stats, difficulty: number, size: number, unl
 export function diffUnlocked(stats: Stats, difficulty: number, unlockAll: boolean): boolean {
   if (unlockAll || difficulty === 0) return true;
   const prev = difficulty - 1;
-  return SIZES.every((s) => stats.winsFor(prev, s) >= UNLOCK_THRESHOLD);
+  return DIFF_UNLOCK_SIZES.every((s) => stats.winsFor(prev, s) >= UNLOCK_THRESHOLD);
 }
 
 /** Per-size lock flags against a selected difficulty (true = locked). */
