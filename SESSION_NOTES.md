@@ -2,6 +2,18 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus mode — hovering an active cell outlines its value across all clues
+
+- In focus, hovering an active (matched) board cell now lights that value's mini
+  in EVERY non-solved clue, not just the focused one: `glowablesForValues` no
+  longer skips focus-dimmed clues — it marks them `muted`. `clueGlow(m, muted)`
+  gives muted minis a soft outline (alpha 0.4, no tint lift) vs the focused
+  clue's full 0.7; solved clues still never highlight. New `Glowable.outlineAlpha`.
+
+Verified: direct glow probe — focused clue outline 0.7, focus-dimmed 0.4, solved
+none; no console errors. (Spread timer firing not testable in headless — clock
+throttled — but glow logic confirmed.)
+
 ## 2026-06-21 — Phaser: focus mode — extra-faint solved clues + auto-advance on solve
 
 - Solved/satisfied clues are pushed to alpha 0.07 in focus (vs 0.18 for the

@@ -76,6 +76,7 @@ interface Glowable {
   scale: number;
   homeY: number;
   canHop: boolean; // clue minis only glow — they must not hop on the board
+  outlineAlpha?: number; // lit-outline opacity (muted for focus-dimmed clues)
 }
 
 export class GameScene extends Phaser.Scene {
@@ -528,9 +529,10 @@ export class GameScene extends Phaser.Scene {
     return { img: b.img, txt: b.txt, outline: b.outline, tintBase: 0xffffff, tintHi: 0xffffff, scale: b.base, homeY: b.cy, canHop: true };
   }
 
-  private clueGlow(m: ClueMini): Glowable {
+  private clueGlow(m: ClueMini, muted = false): Glowable {
     const col = rowColor(m.value);
-    return { img: m.img, txt: m.txt, outline: m.outline, tintBase: col, tintHi: brighten(col, 56), scale: m.scale, homeY: m.img.y, canHop: false };
+    // muted = a focus-dimmed clue: keep it dim (no tint lift), just a soft outline
+    return { img: m.img, txt: m.txt, outline: m.outline, tintBase: col, tintHi: muted ? col : brighten(col, 56), scale: m.scale, homeY: m.img.y, canHop: false, outlineAlpha: muted ? 0.4 : 0.7 };
   }
 
   /** Every highlightable on screen whose value is in `values`. */
@@ -545,9 +547,11 @@ export class GameScene extends Phaser.Scene {
       }
     }
     for (const group of this.clueGroups) {
-      if (group.dim) continue; // crossed-out clue never highlights
-      if (this.focusedClue && group !== this.focusedClue) continue; // dimmed in focus
-      for (const m of group.minis) if (set.has(m.value)) out.push(this.clueGlow(m));
+      if (group.dim) continue; // solved clue never highlights
+      // In focus the focused clue glows fully; the other focus-dimmed clues still
+      // get a MUTED outline so the same value can be spotted across all clues.
+      const muted = this.focusedClue !== null && group !== this.focusedClue;
+      for (const m of group.minis) if (set.has(m.value)) out.push(this.clueGlow(m, muted));
     }
     return out;
   }
@@ -560,7 +564,7 @@ export class GameScene extends Phaser.Scene {
     this.tweens.killTweensOf(movers);
     if (on) {
       g.img.setTint(g.tintHi);
-      if (g.outline) g.outline.setAlpha(0.7);
+      if (g.outline) g.outline.setAlpha(g.outlineAlpha ?? 0.7);
       this.tweens.add({ targets: scalers, scaleX: g.scale * 1.06, scaleY: g.scale * 1.06, duration: 120, ease: 'Back.easeOut' });
       if (hop && g.canHop) {
         // Raise depth so hopping chips always render above their neighbours.
