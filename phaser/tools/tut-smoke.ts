@@ -11,7 +11,7 @@ for (let rep = 0; rep < 20; rep++) {
       if (block === 0) {
         // entry: free, no clues, correct gesture flags
         if (lv.clues.length !== 0) { fails++; console.log(`b0 has clues`); }
-        const tapHalf = level < 3;
+        const tapHalf = level < 2;
         if (lv.tapOk !== tapHalf || lv.holdOk !== !tapHalf) { fails++; console.log(`b0 gesture flags wrong l${level}`); }
       } else {
         // logic: must be solvable by defined+clues, clues = level+1

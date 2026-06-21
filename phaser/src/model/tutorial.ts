@@ -15,7 +15,7 @@ import { SelfWalkthrough } from './selfWalkthrough';
 
 export const TUT_SIZE = 3;
 export const BLOCK_COUNT = 6;
-const LEVELS_PER_BLOCK = 6; // block 0
+const LEVELS_PER_BLOCK = 4; // block 0 — 2 tap levels + 2 hold levels
 const LOGIC_LEVELS_PER_BLOCK = 3; // blocks 1..5
 
 export const BLOCK_NAMES = ['Entry', 'Same column', 'Neighbors', 'Left of', 'Three in a row', 'Mixed'];
@@ -200,7 +200,7 @@ function openCellsCount(nCells: number): Set<string> {
   return out;
 }
 
-const BLOCK0_CELLS = [6, 7, 8, 6, 7, 8];
+const BLOCK0_CELLS = [6, 8, 6, 8]; // levels 0,1 → tap · 2,3 → hold
 
 function givenFromOpen(open: Set<string>): Array<[number, number]> {
   const given: Array<[number, number]> = [];
@@ -226,9 +226,9 @@ function generateEntry(level: number): TutorialLevel {
   let open: Set<string>;
   let tapOk: boolean;
   let holdOk: boolean;
-  if (level < 3) {
+  if (level < 2) {
     // the cascade-friendly "2 per row" layout while it fits (6 cells = 3 rows);
-    // 7/8 cells spill into a free count layout
+    // 8 cells spill into a free count layout
     if (cellCount === 6) open = openCellsInRows(3);
     else open = openCellsCount(cellCount);
     tapOk = true; holdOk = false;
@@ -367,9 +367,10 @@ export class TutorialDirector {
     return BLOCK_INTRO[this.block] ?? null;
   }
 
-  /** The "switch to hold" popup, once, entering level 3 of block 0. */
+  /** The "switch to hold" popup, once, entering the first hold-only level
+   *  (level 2) of block 0. */
   gestureIntro(): string | null {
-    if (this.block !== 0 || this.level !== 3 || this.gestureShown) return null;
+    if (this.block !== 0 || this.level !== 2 || this.gestureShown) return null;
     this.gestureShown = true;
     return GESTURE_HOLD_TEXT;
   }

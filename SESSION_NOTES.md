@@ -1,6 +1,38 @@
 # Session notes
 
-Quick context for resuming work. Latest session: **2026-06-12**.
+Quick context for resuming work. Latest session: **2026-06-21**.
+
+## 2026-06-21 — Phaser: focus-mode / clue / tooltip / tutorial fixes (9)
+
+1. **No hanging hover outline on entering focus** — `enterClueFocus` now calls
+   `hoverEnd()` + `hideTooltip()` first; desktop clue `pointerover`/`pointerout`
+   short-circuit while in focus (the indicator already shows everything), so a
+   cell outline never lingers after the mouse leaves.
+2. **Mobile clue tap → focus immediately** — `tapClue` enters focus on the first
+   tap (no intermediate "armed/highlight" step); a 2nd tap on the focused clue
+   exits.
+3. **Zoom respects focus** — `openZoom` reads the focused clue's value set: the
+   panel plate darkens and non-matched candidates render at `FOCUS_DIM` + inert,
+   matching the dimmed board behind.
+4. **Tap a solved cell (mobile)** — the whole-cell collider now lights that
+   value everywhere (`highlightSolved` → board big cell + every clue mini).
+5. **Zoom above the tooltip** — zoom backdrop/panel/ring depths 85/86/90 (was
+   59/60/65), so the zoom covers a tooltip instead of clipping behind it.
+6. **Tooltip off / empty tap clears it** — the "Show tooltips" toggle calls
+   `applyTooltips()` on the paused game/tutorial; `toMenu` hides the tooltip;
+   global `pointerdown` on empty space hides the tooltip + indicator.
+7. **Exit focus on empty tap** — global `pointerdown` exits focus unless a chip /
+   clue / active cell handled the tap (each sets `touchInterceptor`).
+8. **Focus header = full tooltip** — `showClueTypeIndicator` now renders the
+   whole clue (coloured tiles + connecting words) on one narrow line above the
+   board, not just the relationship symbol.
+9. **Tutorial Entry block → 4 levels** — `BLOCK0_CELLS=[6,8,6,8]`,
+   `LEVELS_PER_BLOCK=4`, levels 0,1 tap / 2,3 hold; `gestureIntro` fires at
+   level 2; `tut-smoke` split updated.
+
+Verified: typecheck + build green; smoke 360/0, tut-smoke 380/0; verify
+playthrough OK; focus probe confirms 0 hanging outlines, indicator container,
+empty-tap exit, no console errors.
 
 ## 2026-06-12 — Phaser: cover GIF for itch.io
 

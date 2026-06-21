@@ -133,7 +133,7 @@ export class MenuScene extends Phaser.Scene {
 
     push(42, 22, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'SOUND', audio.sfxVolume, (v) => audio.setVolume(v), S));
     push(42, 14, (cy) => makeSlider(this, cx - bw / 2, cy - 21, bw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v), S));
-    push(40, 16, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; }, S));
+    push(40, 16, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; this.applyTooltipsLive(); }, S));
     push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); }, S));
     push(40, 8, (cy) => makeToggle(this, cx - bw / 2, cy - 20, bw, 'Zen mode  (records not counted)', settings.zen, (on) => { settings.zen = on; }, S));
 
@@ -249,7 +249,7 @@ export class MenuScene extends Phaser.Scene {
     y += 58;
     makeSlider(this, ix, y, iw, 'MUSIC', audio.musicVolume2, (v) => audio.setMusicVolume(v));
     y += 60;
-    makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; });
+    makeToggle(this, ix, y, iw, 'Show tooltips', settings.tooltips, (on) => { settings.tooltips = on; this.applyTooltipsLive(); });
     y += 40;
     makeToggle(this, ix, y, iw, 'Reduce motion', settings.reduceMotion, (on) => { settings.reduceMotion = on; this.applyReduceMotionLive(); });
     y += 40;
@@ -349,6 +349,13 @@ export class MenuScene extends Phaser.Scene {
     g?.applyReduceMotion?.();
     const t = this.scene.get('tutorial') as Phaser.Scene & { applyReduceMotion?: () => void };
     t?.applyReduceMotion?.();
+  }
+
+  private applyTooltipsLive(): void {
+    const g = this.scene.get('game') as Phaser.Scene & { applyTooltips?: () => void };
+    g?.applyTooltips?.();
+    const t = this.scene.get('tutorial') as Phaser.Scene & { applyTooltips?: () => void };
+    t?.applyTooltips?.();
   }
 
   /** Pick a tutorial block to play/replay (port of pygame BlockSelectOverlay). */

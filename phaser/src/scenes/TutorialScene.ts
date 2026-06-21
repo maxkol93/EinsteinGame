@@ -1014,6 +1014,10 @@ export class TutorialScene extends Phaser.Scene {
     this.fx?.setReduced(settings.reduceMotion);
   }
 
+  applyTooltips(): void {
+    if (!settings.tooltips) this.hideTooltip();
+  }
+
   private toMenu(): void {
     // Pause the tutorial (keeps director in registry) and open the menu as an
     // overlay — so Continue in the menu brings the player back here.
