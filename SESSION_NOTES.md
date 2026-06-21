@@ -2,6 +2,16 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus mode — solved cells stay hoverable (even unmatched)
+
+- In focus, every resolved big cell keeps `input.enabled = true` (was only the
+  matched ones), so hovering ANY solved cell — including focus-dimmed/unmatched
+  ones — lights its value across the clues (muted in dimmed clues, none in
+  solved), via the existing cross-highlight.
+
+Verified: probe — an unmatched solved cell (value 12) is hoverable in focus and
+lights its value's mini in another clue (outline 0.4); no errors.
+
 ## 2026-06-21 — Phaser: focus mode — hovering an active cell outlines its value across all clues
 
 - In focus, hovering an active (matched) board cell now lights that value's mini

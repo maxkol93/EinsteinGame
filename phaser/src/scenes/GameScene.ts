@@ -1763,7 +1763,9 @@ export class GameScene extends Phaser.Scene {
         const big = this.bigObjs[y][x];
         const bigOn = big ? set.has(big.value) : false;
         if (big) {
-          if (big.img.input) big.img.input.enabled = bigOn;
+          // solved cells stay HOVERABLE even when not matched, so hovering any
+          // resolved cell highlights its value across the clues
+          if (big.img.input) big.img.input.enabled = true;
           setAlpha([big.img, big.txt], bigOn ? 1 : dim);
           if (bigOn && hatchHere(y, x, big.value)) this.addFocusHatch(big.img, big.base);
         }
