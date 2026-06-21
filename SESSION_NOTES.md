@@ -2,6 +2,21 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: hatch the three-in-a-row CENTRE cell in focus
+
+- New `hatchTex` (textures.ts): light diagonal stripes clipped to a rounded
+  rect, white on transparent.
+- In focus mode, when the focused clue is three-in-a-row (`rule[1]` is a number),
+  its CENTRE value gets a soft hatch overlay (`addFocusHatch`, alpha 0.32) on
+  every matched board tile (chip/big cell, depth 6) AND on the centre mini in
+  the clue panel (depth FOCUS_DEPTH; that mini's text bumped to FOCUS_DEPTH+1 so
+  the symbol stays above the hatch). Rebuilt each applyFocusVisuals pass,
+  cleared on exit (`clearFocusHatch`). Edge cells stay plain.
+
+Verified: typecheck + build green; probe found tri clue [φ,F,B] center=F,
+hatchCount=2; screenshot confirms hatched F in panel + on board, symbol legible,
+edges plain; no errors.
+
 ## 2026-06-21 — Phaser: focus header symbol square, zoom-pop keeps focus, slimmer clue separators
 
 - **Symbol square in focus header** — left of the spelled-out tooltip,

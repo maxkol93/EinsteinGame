@@ -122,6 +122,30 @@ export function bigCellTex(scene: Phaser.Scene, color: number, w = 160, h = 160,
   return key;
 }
 
+// A light diagonal hatch clipped to a rounded rect — thin white stripes on a
+// transparent ground. Overlaid (low alpha) on the CENTRE cell of a
+// three-in-a-row clue in focus mode so it reads apart from the two edge cells,
+// while the symbol on top stays legible.
+export function hatchTex(scene: Phaser.Scene, size = 128, radius = 26, spacing = 18, lw = 5): string {
+  const key = `hatch_${size}_${radius}_${spacing}_${lw}`;
+  if (scene.textures.exists(key)) return key;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d')!;
+  roundRectPath(ctx, 0, 0, size, size, radius);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(255,255,255,1)';
+  ctx.lineWidth = lw;
+  for (let d = -size; d < size * 2; d += spacing) {
+    ctx.beginPath();
+    ctx.moveTo(d, 0);
+    ctx.lineTo(d + size, size);
+    ctx.stroke();
+  }
+  scene.textures.addCanvas(key, c);
+  return key;
+}
+
 // A radial vignette: transparent at the centre, darkening towards the edges.
 // Used in clue-focus mode to draw the eye to the lit clue + matched cells.
 export function vignetteTex(scene: Phaser.Scene, w: number, h: number): string {

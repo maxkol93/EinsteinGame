@@ -5,7 +5,7 @@ import { PuzzleBoard, ChangeSet } from '../model/board';
 import { symbolFor, glyphOriginY, ruleSegments } from '../model/decoder';
 import { Rule } from '../model/types';
 import { makeButton, BtnHandle } from '../ui/button';
-import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex, vignetteTex } from '../ui/textures';
+import { roundedTex, strokedRoundedTex, bigCellTex, shadowTex, shadowStripTex, vignetteTex, hatchTex } from '../ui/textures';
 import { Fx } from '../fx/fx';
 import { audio } from '../audio/sound';
 import { stats, parTime } from '../model/stats';
@@ -142,6 +142,7 @@ export class GameScene extends Phaser.Scene {
   private cellHits: Phaser.GameObjects.Rectangle[][] = [];
   private focusedClue: ClueGroup | null = null;
   private focusHoverGroup: ClueGroup | null = null; // dimmed clue under the cursor in focus
+  private focusHatch: Phaser.GameObjects.Image[] = []; // tri-clue centre-cell hatch overlays
   private focusOverlay?: Phaser.GameObjects.Rectangle;
   private focusVignette?: Phaser.GameObjects.Image;
   private clueTypeIndicator?: Phaser.GameObjects.Container;
@@ -180,6 +181,7 @@ export class GameScene extends Phaser.Scene {
     this.touchInterceptor = false;
     this.focusedClue = null;
     this.focusHoverGroup = null;
+    this.focusHatch = [];
     this.focusOverlay = undefined;
     this.focusVignette = undefined;
     this.clueTypeIndicator = undefined;
@@ -1667,6 +1669,9 @@ export class GameScene extends Phaser.Scene {
   private applyFocusVisuals(group: ClueGroup, animate: boolean): void {
     const set = new Set(group.minis.map((m) => m.value));
     const dim = GameScene.FOCUS_DIM;
+    // three-in-a-row clue → all three are numbers; its CENTRE value gets a hatch.
+    const center = typeof group.rule[1] === 'number' ? (group.rule[1] as number) : null;
+    this.clearFocusHatch();
     const setAlpha = (objs: Phaser.GameObjects.GameObject[], a: number): void => {
       for (const o of objs) {
         if (!o.active) continue;
@@ -1681,12 +1686,14 @@ export class GameScene extends Phaser.Scene {
           const on = set.has(v);
           if (chip.img.input) chip.img.input.enabled = on;
           setAlpha([chip.img, chip.txt], on ? 1 : dim);
+          if (on && v === center) this.addFocusHatch(chip.img, 6);
         }
         const big = this.bigObjs[y][x];
         if (big) {
           const on = set.has(big.value);
           if (big.img.input) big.img.input.enabled = on;
           setAlpha([big.img, big.txt], on ? 1 : dim);
+          if (on && big.value === center) this.addFocusHatch(big.img, 6);
         }
         const rect = this.cellHits[y]?.[x];
         if (rect?.input) {
@@ -1709,9 +1716,31 @@ export class GameScene extends Phaser.Scene {
         if (animate) this.tweens.killTweensOf([m.img, m.outline]);
         m.outline.setAlpha(0).setScale(m.scale);
         m.img.setScale(m.scale);
+        // hatch the focused tri-clue's CENTRE tile in the panel too
+        if (focused && center !== null && m.value === center) {
+          m.txt.setDepth(GameScene.FOCUS_DEPTH + 1); // keep the symbol above the hatch
+          this.addFocusHatch(m.img, GameScene.FOCUS_DEPTH);
+        }
       }
       setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.32 : dim);
     }
+  }
+
+  /** Overlay a soft diagonal hatch sized to `target` (a tile image), so the
+   *  three-in-a-row centre cell reads apart from the edges. Tracked for teardown. */
+  private addFocusHatch(target: Phaser.GameObjects.Image, depth: number): void {
+    const h = this.add
+      .image(target.x, target.y, hatchTex(this))
+      .setDisplaySize(target.displayWidth, target.displayHeight)
+      .setTint(0xffffff)
+      .setAlpha(0.32)
+      .setDepth(depth);
+    this.focusHatch.push(h);
+  }
+
+  private clearFocusHatch(): void {
+    for (const h of this.focusHatch) h.destroy();
+    this.focusHatch = [];
   }
 
   /** Re-apply the focus visuals after a board change (new big cells from a
@@ -1727,6 +1756,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.focusedClue) return;
     this.focusedClue = null;
     this.focusHoverGroup = null;
+    this.clearFocusHatch();
 
     this.focusOverlay?.destroy();
     this.focusOverlay = undefined;
