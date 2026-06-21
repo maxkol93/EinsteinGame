@@ -1807,19 +1807,19 @@ export class GameScene extends Phaser.Scene {
     this.focusDecor.push({ obj: h, img: target, homeScale: baseScale, offX: 0, offY: 0, hatch: true, baseScale });
   }
 
-  /** Light-grey relationship arrows in a matched cell's empty top/bottom band
-   *  (same-column → ↑/↓; neighbours → ↑/↓ plus ←/→). When `follow` is given the
-   *  arrows track that big cell; otherwise they sit statically in the cell. */
+  /** Light-grey thin-line relationship arrows in a matched cell's empty top/
+   *  bottom band (same-column → ↑/↓; neighbours → ←/→ only). When `follow` is
+   *  given the arrows track that big cell; otherwise they sit statically. */
   private addFocusArrows(mode: 'col' | 'adj', cx: number, cy: number, size: number, follow?: { img: Phaser.GameObjects.Image; base: number }): void {
     const band = size * 0.40; // distance from centre to the top/bottom band
     const sx = size * 0.27;
-    const fs = Math.max(10, Math.round(size * 0.15));
+    const fs = Math.max(11, Math.round(size * 0.17));
     const specs: Array<[string, number, number]> = mode === 'col'
-      ? [['▲', 0, -band], ['▼', 0, band]]
-      : [['◀', -sx, -band], ['▲', 0, -band], ['▶', sx, -band], ['◀', -sx, band], ['▼', 0, band], ['▶', sx, band]];
+      ? [['↑', 0, -band], ['↓', 0, band]]
+      : [['←', -sx, -band], ['→', sx, -band], ['←', -sx, band], ['→', sx, band]];
     for (const [glyph, ox, oy] of specs) {
       const t = this.add
-        .text(cx + ox, cy + oy, glyph, { fontFamily: FONT, fontStyle: 'bold', fontSize: `${fs}px`, color: '#cfcfcf' })
+        .text(cx + ox, cy + oy, glyph, { fontFamily: FONT, fontSize: `${fs}px`, color: '#cfcfcf' })
         .setOrigin(0.5).setAlpha(0.5)
         .setDepth(follow ? follow.img.depth + 1 : 8);
       if (follow) this.focusDecor.push({ obj: t, img: follow.img, homeScale: follow.base, offX: ox, offY: oy, hatch: false, baseScale: 1 });
