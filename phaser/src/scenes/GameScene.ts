@@ -749,6 +749,9 @@ export class GameScene extends Phaser.Scene {
     // skipped when an actual cell/clue was tapped.
     this.input.on('pointerdown', () => {
       if (this.touchInterceptor) { this.touchInterceptor = false; return; }
+      // While the zoom is open, taps inside it (candidates / backdrop) are its
+      // own — never treat them as an empty tap that would exit focus mode.
+      if (this.zoomOverlay) return;
       if (this.focusedClue) { this.exitClueFocus(); return; } // item: exit focus on empty tap
       this.hideTooltip();
       this.hideClueTypeIndicator();
@@ -1225,13 +1228,20 @@ export class GameScene extends Phaser.Scene {
       const totalW = cols * pRuleW + (cols - 1) * colGap;
       const startX = (GAME.width - totalW) / 2;
       const perCol = Math.ceil(items.length / cols);
+      const sepH = Math.round(rowH / 2); // separator slot is half a clue row
+      const colY = new Array(cols).fill(top);
       items.forEach((it, i) => {
         const tx = Math.floor(i / perCol);
-        const ty = i % perCol;
         const gx = startX + tx * (pRuleW + colGap);
-        const gy = top + ty * rowH;
-        if ('sep' in it) this.makeClueSeparator(gx, gy, pRuleW, ruleCell);
-        else this.makeClueGroup(it.rule, gx, gy, ruleCell);
+        const gy = colY[tx];
+        const colEnd = i % perCol === perCol - 1;
+        if ('sep' in it) {
+          // a separator that ends a column is dropped (no dangling line/gap)
+          if (!colEnd) { this.makeClueSeparator(gx, gy, pRuleW, sepH); colY[tx] += sepH; }
+        } else {
+          this.makeClueGroup(it.rule, gx, gy, ruleCell);
+          colY[tx] += rowH;
+        }
       });
       return;
     }
@@ -1265,21 +1275,28 @@ export class GameScene extends Phaser.Scene {
     const totalW = numCols * finalRuleW + (numCols - 1) * colGap;
     const startX = regionL + (regionW - totalW) / 2;
     const perCol = Math.ceil(items.length / numCols);
+    const rowStep = ruleCell + 9;
+    const sepH = Math.round(rowStep / 2); // separator slot is half a clue row
+    const colY = new Array(numCols).fill(RULES_TOP);
     items.forEach((it, i) => {
-      const ty = i % perCol;
       const tx = Math.floor(i / perCol);
       const gx = startX + tx * (finalRuleW + colGap);
-      const gy = RULES_TOP + ty * (ruleCell + 9);
-      if ('sep' in it) this.makeClueSeparator(gx, gy, finalRuleW, ruleCell);
-      else this.makeClueGroup(it.rule, gx, gy, ruleCell);
+      const gy = colY[tx];
+      const colEnd = i % perCol === perCol - 1;
+      if ('sep' in it) {
+        // a separator that ends a column is dropped (no dangling line/gap)
+        if (!colEnd) { this.makeClueSeparator(gx, gy, finalRuleW, sepH); colY[tx] += sepH; }
+      } else {
+        this.makeClueGroup(it.rule, gx, gy, ruleCell);
+        colY[tx] += rowStep;
+      }
     });
   }
 
-  /** A thin horizontal divider occupying one clue-row slot, drawn centred in
-   *  the slot so the row step stays uniform. */
-  private makeClueSeparator(gx: number, gy: number, w: number, cellSize: number): void {
+  /** A thin horizontal divider, drawn centred in its (half-height) slot. */
+  private makeClueSeparator(gx: number, gy: number, w: number, slotH: number): void {
     this.add
-      .rectangle(gx, gy + cellSize / 2, w, 2, brighten(COLORS.panel, 34), 0.55)
+      .rectangle(gx, gy + slotH / 2, w, 2, brighten(COLORS.panel, 34), 0.55)
       .setOrigin(0, 0.5);
   }
 
@@ -1528,12 +1545,26 @@ export class GameScene extends Phaser.Scene {
     const contentW = toks.reduce((a, t) => a + t.w, 0) + gap * Math.max(0, toks.length - 1);
     const pw = Math.ceil(contentW + padX * 2);
 
+    // A separate little square to the LEFT of the tooltip shows the relationship
+    // symbol (↕ same-column, ↔ neighbours, … left-of). Three-in-a-row has no
+    // single symbol, so it gets no square.
+    const op = rule[1];
+    const sqSym = op === '^' ? '↕' : op === '<->' ? '↔' : op === '...' ? '…' : null;
+    const sqSide = ph;
+    const sqGap = 8;
+    const shift = sqSym ? (sqSide + sqGap) / 2 : 0; // nudge the tooltip right to keep the pair centred
+
     const cx = PORTRAIT ? GAME.width / 2 : BX + SPAN / 2;
     const cy = PORTRAIT ? TOP_H - 22 : Math.round(BY / 2);
 
     const objs: Phaser.GameObjects.GameObject[] = [];
-    objs.push(this.add.image(0, 0, roundedTex(this, pw, ph, 10)).setTint(brighten(COLORS.panel, 24)).setAlpha(0.92));
-    let x = -contentW / 2;
+    if (sqSym) {
+      const sqx = shift - pw / 2 - sqGap - sqSide / 2;
+      objs.push(this.add.image(sqx, 0, roundedTex(this, sqSide, sqSide, 10)).setTint(brighten(COLORS.panel, 24)).setAlpha(0.92));
+      objs.push(this.add.text(sqx, 0, sqSym, { fontFamily: FONT, fontStyle: 'bold', fontSize: `${PORTRAIT ? 24 : 20}px`, color: palette.text }).setOrigin(0.5));
+    }
+    objs.push(this.add.image(shift, 0, roundedTex(this, pw, ph, 10)).setTint(brighten(COLORS.panel, 24)).setAlpha(0.92));
+    let x = shift - contentW / 2;
     for (const tk of toks) {
       const tcx = x + tk.w / 2;
       if (tk.kind === 'cell') {

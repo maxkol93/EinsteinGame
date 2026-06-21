@@ -2,6 +2,24 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus header symbol square, zoom-pop keeps focus, slimmer clue separators
+
+- **Symbol square in focus header** — left of the spelled-out tooltip,
+  `showClueTypeIndicator` now draws a separate little square with the relation
+  symbol (↕ same-column, ↔ neighbours, … left-of). Three-in-a-row has no single
+  symbol → no square; the pair stays centred above the board.
+- **Zoom-pop no longer exits focus (mobile)** — the global empty-tap handler
+  early-returns while `zoomOverlay` is open, so popping a candidate in the zoom
+  stays in focus; only a pop that completes the clue auto-dims → refreshFocus
+  exits (unchanged path).
+- **Clue separators** — `makeClueSeparator` slot is now half a clue row
+  (`sepH = rowH/2`), and a separator that lands at the bottom of a column is
+  dropped entirely (no dangling line). Layout switched to a per-column y-cursor.
+
+Verified: typecheck + build green; portrait probe — zoom-pop keeps focus
+(focused:true,dim:false); desktop probe — square shows ↕ for `^`, none for tri;
+screenshot confirms square-left-of-tooltip + tighter separator gap; no errors.
+
 ## 2026-06-21 — Phaser: focus mode — switch clues in place + muted hover
 
 - **Switch focus without leaving it** — `enterClueFocus` detects an existing
