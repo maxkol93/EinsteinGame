@@ -2,6 +2,16 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: mouse wheel cycles clues in focus mode
+
+- In focus mode the mouse wheel switches focus to the next (wheel down) /
+  previous (wheel up) clue in display order; `adjacentClue()` skips solved
+  (dimmed) clues and wraps around at both ends. Reuses the smooth in-place
+  `enterClueFocus` switch. Ignored when a zoom is open / game over.
+
+Verified: probe — wheel-down cycles 0→…→6→0 (wrap to first), wheel-up 0→6
+(wrap to last); no console errors.
+
 ## 2026-06-21 — Phaser: focus-mode cell cues (freeze fix, follow-decor, left-of hatch, ^/↔ arrows)
 
 - **No more frozen tiles** — `enterClueFocus` calls `snapTilesHome()` first: kills

@@ -765,6 +765,26 @@ export class GameScene extends Phaser.Scene {
       this.hoverEnd(); // drop any solved-cell highlight
       if (settings.touch) { this.clearArmed(); this.clearClueHighlight(); }
     });
+    // In focus mode, the mouse wheel cycles to the next / previous clue (skips
+    // solved ones, wraps around at the ends).
+    this.input.on('wheel', (_p: Phaser.Input.Pointer, _go: unknown, _dx: number, dy: number) => {
+      if (!this.focusedClue || this.gameOver || this.zoomOverlay || dy === 0) return;
+      const next = this.adjacentClue(this.focusedClue, dy > 0 ? 1 : -1);
+      if (next && next !== this.focusedClue) this.enterClueFocus(next);
+    });
+  }
+
+  /** The next non-solved clue from `from` in display order, stepping by `dir`
+   *  (+1 next, -1 previous) and wrapping around the list. */
+  private adjacentClue(from: ClueGroup, dir: number): ClueGroup | null {
+    const n = this.clueGroups.length;
+    if (n === 0) return null;
+    let i = this.clueGroups.indexOf(from);
+    for (let step = 0; step < n; step++) {
+      i = (i + dir + n) % n;
+      if (!this.clueGroups[i].dim) return this.clueGroups[i];
+    }
+    return null;
   }
 
   /** Touch tap-to-select: the first tap ARMS a candidate (a pulsing frame +
