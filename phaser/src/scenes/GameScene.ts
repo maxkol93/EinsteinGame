@@ -141,6 +141,7 @@ export class GameScene extends Phaser.Scene {
   private menuBtn?: BtnHandle;
   private cellHits: Phaser.GameObjects.Rectangle[][] = [];
   private focusedClue: ClueGroup | null = null;
+  private focusHoverGroup: ClueGroup | null = null; // dimmed clue under the cursor in focus
   private focusOverlay?: Phaser.GameObjects.Rectangle;
   private focusVignette?: Phaser.GameObjects.Image;
   private clueTypeIndicator?: Phaser.GameObjects.Container;
@@ -178,6 +179,7 @@ export class GameScene extends Phaser.Scene {
     this.zoomOverlay = undefined;
     this.touchInterceptor = false;
     this.focusedClue = null;
+    this.focusHoverGroup = null;
     this.focusOverlay = undefined;
     this.focusVignette = undefined;
     this.clueTypeIndicator = undefined;
@@ -1329,15 +1331,21 @@ export class GameScene extends Phaser.Scene {
       // Desktop: hover highlights board cells; click enters/exits focus mode.
       hit.on('pointerover', () => {
         if (this.gameOver || group.dim) return;
-        // In focus mode the indicator already shows the clue + the matched cells
-        // are lit, so don't start a transient hover (it would hang an outline).
-        if (this.focusedClue) return;
+        if (this.focusedClue) {
+          // In focus mode the focused clue is already lit; a dimmed clue gets a
+          // muted outline so you can see (and switch to) it without leaving focus.
+          if (group !== this.focusedClue) this.focusHoverClue(group, true);
+          return;
+        }
         this.showClueTypeIndicator(group.rule);
         this.showTooltip(group);
         this.hoverStart(group, group.minis.map((m) => m.value), { glowNow: group.minis.map((m) => this.clueGlow(m)) });
       });
       hit.on('pointerout', () => {
-        if (this.focusedClue) return; // nothing transient to clear in focus
+        if (this.focusedClue) {
+          if (group !== this.focusedClue) this.focusHoverClue(group, false);
+          return;
+        }
         this.hideClueTypeIndicator();
         this.hideTooltip();
         if (this.hoverSource === group) this.hoverEnd();
@@ -1556,42 +1564,71 @@ export class GameScene extends Phaser.Scene {
   private static readonly FOCUS_DEPTH = 12; // focused clue + lit content sit here
   private static readonly OVERLAY_DEPTH = 4; // above background, below chips
 
-  /** Lock-mode: PC click clue to enter, click again to exit. Mobile: 2nd tap
-   *  enters, 3rd tap exits. */
+  /** Enter focus on `group`, or — if already in focus — switch the focus to
+   *  `group` in place. Switching keeps the dim overlay up and just cross-fades
+   *  which clue/cells are bright (no full brightness flash between clues).
+   *  PC: click a clue to enter, click another to switch, click it again to exit.
+   *  Mobile: tap a clue to enter, tap another to switch, tap it to exit. */
   private enterClueFocus(group: ClueGroup): void {
-    if (this.focusedClue) this.exitClueFocus();
     if (group.dim) return;
-    // Clear any transient hover glow / floating tooltip from before focus, so
-    // no cell outline is left hanging once everything else dims.
+    if (this.focusedClue === group) return;
+    const switching = this.focusedClue !== null;
+    // Clear any transient hover glow / floating tooltip / muted hover outline so
+    // nothing is left hanging once the new clue takes focus.
     this.hoverEnd();
     this.hideTooltip();
+    this.clearFocusHover();
     this.focusedClue = group;
     this.armedClue = null; // focus supersedes the mobile "armed" state
 
-    // A flat dim over the whole scene (background/panels) + a radial vignette,
-    // both below the chips so lit content isn't darkened by them.
-    const ov = this.add
-      .rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0)
-      .setDepth(GameScene.OVERLAY_DEPTH);
-    this.focusOverlay = ov;
-    const vig = this.add
-      .image(GAME.width / 2, GAME.height / 2, vignetteTex(this, GAME.width, GAME.height))
-      .setDisplaySize(GAME.width, GAME.height)
-      .setAlpha(0)
-      .setDepth(GameScene.OVERLAY_DEPTH);
-    this.focusVignette = vig;
-    this.tweens.add({ targets: ov, fillAlpha: 0.5, duration: 240, ease: 'Quad.easeOut' });
-    this.tweens.add({ targets: vig, alpha: 1, duration: 280, ease: 'Quad.easeOut' });
-
-    // Keep the menu button lit + clickable above the dim.
-    this.menuBtn?.root.setDepth(96);
+    if (!switching) {
+      // First entry: a flat dim over the whole scene (background/panels) + a
+      // radial vignette, both below the chips so lit content isn't darkened.
+      const ov = this.add
+        .rectangle(GAME.width / 2, GAME.height / 2, GAME.width, GAME.height, 0x000000, 0)
+        .setDepth(GameScene.OVERLAY_DEPTH);
+      this.focusOverlay = ov;
+      const vig = this.add
+        .image(GAME.width / 2, GAME.height / 2, vignetteTex(this, GAME.width, GAME.height))
+        .setDisplaySize(GAME.width, GAME.height)
+        .setAlpha(0)
+        .setDepth(GameScene.OVERLAY_DEPTH);
+      this.focusVignette = vig;
+      this.tweens.add({ targets: ov, fillAlpha: 0.5, duration: 240, ease: 'Quad.easeOut' });
+      this.tweens.add({ targets: vig, alpha: 1, duration: 280, ease: 'Quad.easeOut' });
+      // Keep the menu button lit + clickable above the dim.
+      this.menuBtn?.root.setDepth(96);
+    }
 
     this.applyFocusVisuals(group, true);
     this.showClueTypeIndicator(group.rule);
 
-    // A gentle one-shot emphasis pop on the focused clue.
+    // A gentle one-shot emphasis pop on the now-focused clue.
     const pop = group.objs.filter((o) => o.active);
     this.tweens.add({ targets: pop, scaleX: 1.07, scaleY: 1.07, duration: 150, yoyo: true, ease: 'Sine.easeOut' });
+  }
+
+  /** Hover feedback on a DIMMED clue while in focus mode: a muted outline (and a
+   *  hair of scale) so it reads as a switch target, without un-dimming it. */
+  private focusHoverClue(group: ClueGroup, on: boolean): void {
+    if (group.dim || group === this.focusedClue) return;
+    if (on) {
+      if (this.focusHoverGroup && this.focusHoverGroup !== group) this.focusHoverClue(this.focusHoverGroup, false);
+      this.focusHoverGroup = group;
+    } else if (this.focusHoverGroup === group) {
+      this.focusHoverGroup = null;
+    }
+    const sc = on ? 1.04 : 1;
+    for (const m of group.minis) {
+      this.tweens.killTweensOf([m.img, m.outline]);
+      m.outline.setTint(0xffffff).setDepth(GameScene.FOCUS_DEPTH);
+      this.tweens.add({ targets: [m.img, m.outline], scaleX: m.scale * sc, scaleY: m.scale * sc, duration: 120, ease: on ? 'Back.easeOut' : 'Quad.easeOut' });
+      this.tweens.add({ targets: m.outline, alpha: on ? 0.4 : 0, duration: 120 });
+    }
+  }
+
+  private clearFocusHover(): void {
+    if (this.focusHoverGroup) this.focusHoverClue(this.focusHoverGroup, false);
   }
 
   /** Set alpha / interactivity / depth on every board chip and clue to reflect
@@ -1602,7 +1639,7 @@ export class GameScene extends Phaser.Scene {
     const setAlpha = (objs: Phaser.GameObjects.GameObject[], a: number): void => {
       for (const o of objs) {
         if (!o.active) continue;
-        if (animate) this.tweens.add({ targets: o, alpha: a, duration: 220, ease: 'Quad.easeOut' });
+        if (animate) { this.tweens.killTweensOf(o); this.tweens.add({ targets: o, alpha: a, duration: 220, ease: 'Quad.easeOut' }); }
         else (o as Phaser.GameObjects.Image).setAlpha(a);
       }
     };
@@ -1630,10 +1667,18 @@ export class GameScene extends Phaser.Scene {
 
     for (const grp of this.clueGroups) {
       const focused = grp === group;
-      if (grp.hit.input) grp.hit.input.enabled = focused;
+      // every non-solved clue stays clickable so you can switch focus to it
+      // without leaving focus mode (auto-dimmed/solved clues are inert).
+      if (grp.hit.input) grp.hit.input.enabled = !grp.dim;
       // raise above the dim so depth is consistent (focused bright, rest dimmed)
       for (const o of grp.objs) (o as Phaser.GameObjects.Image).setDepth(GameScene.FOCUS_DEPTH);
-      for (const m of grp.minis) m.outline.setDepth(GameScene.FOCUS_DEPTH);
+      // clear any leftover muted-hover outline/scale so it doesn't hang after a switch
+      for (const m of grp.minis) {
+        m.outline.setDepth(GameScene.FOCUS_DEPTH);
+        if (animate) this.tweens.killTweensOf([m.img, m.outline]);
+        m.outline.setAlpha(0).setScale(m.scale);
+        m.img.setScale(m.scale);
+      }
       setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.32 : dim);
     }
   }
@@ -1650,6 +1695,7 @@ export class GameScene extends Phaser.Scene {
   private exitClueFocus(): void {
     if (!this.focusedClue) return;
     this.focusedClue = null;
+    this.focusHoverGroup = null;
 
     this.focusOverlay?.destroy();
     this.focusOverlay = undefined;
@@ -1677,11 +1723,16 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // Restore clue depths + alpha (auto-dimmed clues keep their 0.32).
+    // Restore clue depths + alpha (auto-dimmed clues keep their 0.32) and clear
+    // any leftover muted-hover outline/scale.
     for (const grp of this.clueGroups) {
       this.tweens.killTweensOf(grp.objs);
       for (const o of grp.objs) (o as Phaser.GameObjects.Image).setDepth(0).setAlpha(grp.dim ? 0.32 : 1);
-      for (const m of grp.minis) m.outline.setDepth(0);
+      for (const m of grp.minis) {
+        this.tweens.killTweensOf([m.img, m.outline]);
+        m.outline.setDepth(0).setAlpha(0).setScale(m.scale);
+        m.img.setScale(m.scale);
+      }
       if (grp.hit.input) grp.hit.input.enabled = true;
     }
 

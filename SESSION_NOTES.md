@@ -2,6 +2,23 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus mode — switch clues in place + muted hover
+
+- **Switch focus without leaving it** — `enterClueFocus` detects an existing
+  focus and re-targets in place (overlay/vignette stay up), cross-fading which
+  clue/cells are bright instead of flashing back to full brightness. All
+  non-solved clue hit-areas stay enabled in focus (`applyFocusVisuals`), so a
+  click/tap on any dimmed clue switches to it.
+- **Muted hover on dimmed clues** — `focusHoverClue`/`clearFocusHover` show a
+  toned-down outline (+ tiny scale) on the dimmed clue under the cursor while
+  its tiles stay dim, so you can see a switch target; cleared on switch/exit.
+- `applyFocusVisuals` now kills prior tweens + resets mini outline/scale per
+  pass so nothing hangs across a switch.
+
+Verified: typecheck + build green; probe confirms single applyFocusVisuals call
+per switch, non-focused clues settle to FOCUS_DIM, hover outline rises while
+tiles stay dim, switch keeps the overlay up; verify playthrough OK.
+
 ## 2026-06-21 — Phaser: focus-mode / clue / tooltip / tutorial fixes (9)
 
 1. **No hanging hover outline on entering focus** — `enterClueFocus` now calls
