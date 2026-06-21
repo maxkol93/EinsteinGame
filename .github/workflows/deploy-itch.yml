@@ -48,6 +48,17 @@ jobs:
           npm ci
           npm run build
 
+      # A downloadable copy of the web build, attached to the Actions run so it
+      # can be grabbed and uploaded to the main itch project by hand after
+      # testing the staging build. Downloads as "einstein-1.0.<run>.zip" with
+      # index.html at the root (ready to drop straight into itch).
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: einstein-1.0.${{ github.run_number }}
+          path: phaser/dist
+          if-no-files-found: error
+
       - name: Install butler
         run: |
           # --retry-all-errors so a transient DNS/connection blip to broth is retried
