@@ -1798,7 +1798,9 @@ export class GameScene extends Phaser.Scene {
           this.addFocusHatch(m.img, m.scale);
         }
       }
-      setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.32 : dim);
+      // solved/satisfied clues are pushed EXTRA faint so they read apart from
+      // the merely focus-dimmed ones
+      setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.07 : dim);
     }
   }
 
@@ -1875,10 +1877,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Re-apply the focus visuals after a board change (new big cells from a
-   *  cascade need dimming too); auto-exit if the focused clue got solved. */
+   *  cascade need dimming too); if the focused clue just got solved, advance the
+   *  focus to the next available clue instead of dropping out of focus mode. */
   private refreshFocus(): void {
     if (!this.focusedClue) return;
-    if (this.focusedClue.dim) { this.exitClueFocus(); return; }
+    if (this.focusedClue.dim) {
+      const next = this.adjacentClue(this.focusedClue, 1);
+      if (next) this.enterClueFocus(next);
+      else this.exitClueFocus(); // nothing left unsolved → leave focus
+      return;
+    }
     this.applyFocusVisuals(this.focusedClue, false);
     this.showClueTypeIndicator(this.focusedClue.rule);
   }

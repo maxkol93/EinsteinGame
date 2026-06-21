@@ -2,6 +2,17 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus mode — extra-faint solved clues + auto-advance on solve
+
+- Solved/satisfied clues are pushed to alpha 0.07 in focus (vs 0.18 for the
+  merely focus-dimmed), so they read clearly apart.
+- When the focused clue gets solved, `refreshFocus` now advances focus to the
+  next available clue (`adjacentClue`) instead of exiting; it only leaves focus
+  once every clue is solved.
+
+Verified: probe — solving the focused clue switches to another (switchedAway),
+all-solved exits, solved-clue alpha < focus-dim alpha; no console errors.
+
 ## 2026-06-21 — Phaser: mouse wheel cycles clues in focus mode
 
 - In focus mode the mouse wheel switches focus to the next (wheel down) /
