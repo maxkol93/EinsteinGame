@@ -2,6 +2,26 @@
 
 Quick context for resuming work. Latest session: **2026-06-21**.
 
+## 2026-06-21 — Phaser: focus-mode cell cues (freeze fix, follow-decor, left-of hatch, ^/↔ arrows)
+
+- **No more frozen tiles** — `enterClueFocus` calls `snapTilesHome()` first: kills
+  any in-flight hover hop/lift tween and resets every chip/big to home pos/scale/
+  depth, so clicking into focus mid-animation can't leave tiles stuck in the air.
+- **Decorations follow their tile** — replaced the static hatch list with a
+  `focusDecor` system synced every frame in `update()` (position/scale/displaySize/
+  depth track the tile's hop/lift/scale); self-cleans decor whose tile is
+  destroyed mid-cascade. Static arrows on candidate cells live in `focusStatic`.
+- **Left-of (…) hatch** — `extremeCell()` finds the left value's LEFTMOST and the
+  right value's RIGHTMOST still-available cell; both get hatched, recomputed each
+  applyFocusVisuals pass (so popping re-targets them).
+- **Same-column / neighbours arrows** — `addFocusArrows`: light-grey arrows in a
+  matched cell's empty top/bottom band — `▲ ▼` for `^`, `◀ ▲ ▶ / ◀ ▼ ▶` for `↔`.
+  They follow matched big cells (focusDecor) or sit static in candidate cells.
+
+Verified: typecheck + build green; screenshots confirm ^ (▲▼), ↔ (◀▲▶/◀▼▶),
+… (leftmost-left + rightmost-right hatch), tri (centre hatch); deterministic
+probe — 9px displaced tiles snap to 0 on focus enter; no console errors.
+
 ## 2026-06-21 — Phaser: hatch the three-in-a-row CENTRE cell in focus
 
 - New `hatchTex` (textures.ts): light diagonal stripes clipped to a rounded

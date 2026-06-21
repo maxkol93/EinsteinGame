@@ -142,7 +142,11 @@ export class GameScene extends Phaser.Scene {
   private cellHits: Phaser.GameObjects.Rectangle[][] = [];
   private focusedClue: ClueGroup | null = null;
   private focusHoverGroup: ClueGroup | null = null; // dimmed clue under the cursor in focus
-  private focusHatch: Phaser.GameObjects.Image[] = []; // tri-clue centre-cell hatch overlays
+  // Focus-mode cell decorations (hatch + relationship arrows). `follow` ones are
+  // pinned to a tile each frame (so they hop/lift/scale with it); `static` ones
+  // sit in a candidate cell's empty margins and don't move.
+  private focusDecor: Array<{ obj: Phaser.GameObjects.Image | Phaser.GameObjects.Text; img: Phaser.GameObjects.Image; homeScale: number; offX: number; offY: number; hatch: boolean; baseScale: number }> = [];
+  private focusStatic: Phaser.GameObjects.GameObject[] = [];
   private focusOverlay?: Phaser.GameObjects.Rectangle;
   private focusVignette?: Phaser.GameObjects.Image;
   private clueTypeIndicator?: Phaser.GameObjects.Container;
@@ -181,7 +185,8 @@ export class GameScene extends Phaser.Scene {
     this.touchInterceptor = false;
     this.focusedClue = null;
     this.focusHoverGroup = null;
-    this.focusHatch = [];
+    this.focusDecor = [];
+    this.focusStatic = [];
     this.focusOverlay = undefined;
     this.focusVignette = undefined;
     this.clueTypeIndicator = undefined;
@@ -1611,6 +1616,7 @@ export class GameScene extends Phaser.Scene {
     this.hoverEnd();
     this.hideTooltip();
     this.clearFocusHover();
+    this.snapTilesHome(); // a mid-hover hop/lift mustn't freeze when its tween is killed below
     this.focusedClue = group;
     this.armedClue = null; // focus supersedes the mobile "armed" state
 
@@ -1664,14 +1670,56 @@ export class GameScene extends Phaser.Scene {
     if (this.focusHoverGroup) this.focusHoverClue(this.focusHoverGroup, false);
   }
 
+  /** Snap every chip / big cell back to its home position, scale and depth,
+   *  killing any in-flight hover hop/lift tween — so nothing is left frozen in
+   *  mid-air when entering focus during a hover animation. */
+  private snapTilesHome(): void {
+    for (let y = 0; y < this.size; y++) {
+      for (let x = 0; x < this.size; x++) {
+        for (const [, c] of this.chips[y][x]) {
+          this.tweens.killTweensOf([c.img, c.txt, c.outline]);
+          c.img.setPosition(c.cx, c.cy).setScale(c.base).setDepth(5);
+          c.txt.setPosition(c.cx, c.cy).setScale(1).setDepth(7);
+          c.outline.setPosition(c.cx, c.cy).setScale(c.base).setAlpha(0).setDepth(6);
+        }
+        const b = this.bigObjs[y][x];
+        if (b) {
+          this.tweens.killTweensOf([b.img, b.txt, b.outline]);
+          b.img.setPosition(b.cx, b.cy).setScale(b.base).setDepth(5);
+          b.txt.setPosition(b.cx, b.cy).setScale(1).setDepth(7);
+          b.outline.setPosition(b.cx, b.cy).setScale(b.base).setAlpha(0).setDepth(6);
+        }
+      }
+    }
+    if (this.liftShadow) { this.tweens.killTweensOf(this.liftShadow); this.liftShadow.setAlpha(0); }
+  }
+
   /** Set alpha / interactivity / depth on every board chip and clue to reflect
    *  the focus on `group`: matched stay bright + active, the rest dim + inert. */
   private applyFocusVisuals(group: ClueGroup, animate: boolean): void {
     const set = new Set(group.minis.map((m) => m.value));
     const dim = GameScene.FOCUS_DIM;
-    // three-in-a-row clue → all three are numbers; its CENTRE value gets a hatch.
-    const center = typeof group.rule[1] === 'number' ? (group.rule[1] as number) : null;
-    this.clearFocusHatch();
+    const op = group.rule[1];
+    // Per-clue-type cell cues (rebuilt each pass so they track the board):
+    //  • three-in-a-row → hatch the CENTRE value's cells (+ the centre mini)
+    //  • left-of (…)    → hatch the left value's LEFTMOST + right value's RIGHTMOST cell
+    //  • same-column(^) / neighbours(↔) → directional arrows on matched cells
+    const center = typeof op === 'number' ? (group.rule[1] as number) : null;
+    let lrLeft: { y: number; x: number; v: number } | null = null;
+    let lrRight: { y: number; x: number; v: number } | null = null;
+    if (op === '...') {
+      const lv = group.rule[0] as number; const rv = group.rule[2] as number;
+      const lc = this.extremeCell(lv, true); const rc = this.extremeCell(rv, false);
+      if (lc) lrLeft = { ...lc, v: lv };
+      if (rc) lrRight = { ...rc, v: rv };
+    }
+    const arrowMode: 'col' | 'adj' | null = op === '^' ? 'col' : op === '<->' ? 'adj' : null;
+    const hatchHere = (y: number, x: number, v: number): boolean =>
+      (center !== null && v === center) ||
+      (lrLeft !== null && y === lrLeft.y && x === lrLeft.x && v === lrLeft.v) ||
+      (lrRight !== null && y === lrRight.y && x === lrRight.x && v === lrRight.v);
+    this.clearFocusDecor();
+
     const setAlpha = (objs: Phaser.GameObjects.GameObject[], a: number): void => {
       for (const o of objs) {
         if (!o.active) continue;
@@ -1686,14 +1734,21 @@ export class GameScene extends Phaser.Scene {
           const on = set.has(v);
           if (chip.img.input) chip.img.input.enabled = on;
           setAlpha([chip.img, chip.txt], on ? 1 : dim);
-          if (on && v === center) this.addFocusHatch(chip.img, 6);
+          if (on && hatchHere(y, x, v)) this.addFocusHatch(chip.img, chip.base);
         }
         const big = this.bigObjs[y][x];
+        const bigOn = big ? set.has(big.value) : false;
         if (big) {
-          const on = set.has(big.value);
-          if (big.img.input) big.img.input.enabled = on;
-          setAlpha([big.img, big.txt], on ? 1 : dim);
-          if (on && big.value === center) this.addFocusHatch(big.img, 6);
+          if (big.img.input) big.img.input.enabled = bigOn;
+          setAlpha([big.img, big.txt], bigOn ? 1 : dim);
+          if (bigOn && hatchHere(y, x, big.value)) this.addFocusHatch(big.img, big.base);
+        }
+        // directional arrows: follow a matched big cell, else sit in a matched
+        // candidate cell's empty margins
+        if (arrowMode) {
+          const { cx, cy } = this.cellCenter(y, x);
+          if (big && bigOn) this.addFocusArrows(arrowMode, cx, cy, this.cellSide, { img: big.img, base: big.base });
+          else if (!big && this.board.cells[y][x].candidates.some((c) => set.has(c))) this.addFocusArrows(arrowMode, cx, cy, this.cellSide);
         }
         const rect = this.cellHits[y]?.[x];
         if (rect?.input) {
@@ -1716,31 +1771,87 @@ export class GameScene extends Phaser.Scene {
         if (animate) this.tweens.killTweensOf([m.img, m.outline]);
         m.outline.setAlpha(0).setScale(m.scale);
         m.img.setScale(m.scale);
+        m.txt.setDepth(GameScene.FOCUS_DEPTH); // reset (only the hatched centre is raised)
         // hatch the focused tri-clue's CENTRE tile in the panel too
         if (focused && center !== null && m.value === center) {
-          m.txt.setDepth(GameScene.FOCUS_DEPTH + 1); // keep the symbol above the hatch
-          this.addFocusHatch(m.img, GameScene.FOCUS_DEPTH);
+          m.txt.setDepth(GameScene.FOCUS_DEPTH + 2); // keep the symbol above the hatch
+          this.addFocusHatch(m.img, m.scale);
         }
       }
       setAlpha(grp.objs, focused ? 1 : grp.dim ? 0.32 : dim);
     }
   }
 
-  /** Overlay a soft diagonal hatch sized to `target` (a tile image), so the
-   *  three-in-a-row centre cell reads apart from the edges. Tracked for teardown. */
-  private addFocusHatch(target: Phaser.GameObjects.Image, depth: number): void {
+  /** Leftmost (or rightmost) board cell in value `v`'s row that still holds `v`
+   *  (solved there, or `v` is still a candidate). Used for the left-of (…) cue. */
+  private extremeCell(v: number, leftmost: boolean): { y: number; x: number } | null {
+    const y = Math.floor(v / 10) - 1;
+    if (y < 0 || y >= this.size) return null;
+    const xs = leftmost ? [...Array(this.size).keys()] : [...Array(this.size).keys()].reverse();
+    for (const x of xs) {
+      const cell = this.board.cells[y][x];
+      if (cell.value === v || (cell.value === null && cell.candidates.includes(v))) return { y, x };
+    }
+    return null;
+  }
+
+  /** Overlay a soft diagonal hatch pinned to `target` (it tracks the tile's
+   *  hop/lift/scale each frame via update()). */
+  private addFocusHatch(target: Phaser.GameObjects.Image, baseScale: number): void {
     const h = this.add
       .image(target.x, target.y, hatchTex(this))
       .setDisplaySize(target.displayWidth, target.displayHeight)
       .setTint(0xffffff)
       .setAlpha(0.32)
-      .setDepth(depth);
-    this.focusHatch.push(h);
+      .setDepth(target.depth + 1);
+    this.focusDecor.push({ obj: h, img: target, homeScale: baseScale, offX: 0, offY: 0, hatch: true, baseScale });
   }
 
-  private clearFocusHatch(): void {
-    for (const h of this.focusHatch) h.destroy();
-    this.focusHatch = [];
+  /** Light-grey relationship arrows in a matched cell's empty top/bottom band
+   *  (same-column → ↑/↓; neighbours → ↑/↓ plus ←/→). When `follow` is given the
+   *  arrows track that big cell; otherwise they sit statically in the cell. */
+  private addFocusArrows(mode: 'col' | 'adj', cx: number, cy: number, size: number, follow?: { img: Phaser.GameObjects.Image; base: number }): void {
+    const band = size * 0.40; // distance from centre to the top/bottom band
+    const sx = size * 0.27;
+    const fs = Math.max(10, Math.round(size * 0.15));
+    const specs: Array<[string, number, number]> = mode === 'col'
+      ? [['▲', 0, -band], ['▼', 0, band]]
+      : [['◀', -sx, -band], ['▲', 0, -band], ['▶', sx, -band], ['◀', -sx, band], ['▼', 0, band], ['▶', sx, band]];
+    for (const [glyph, ox, oy] of specs) {
+      const t = this.add
+        .text(cx + ox, cy + oy, glyph, { fontFamily: FONT, fontStyle: 'bold', fontSize: `${fs}px`, color: '#cfcfcf' })
+        .setOrigin(0.5).setAlpha(0.5)
+        .setDepth(follow ? follow.img.depth + 1 : 8);
+      if (follow) this.focusDecor.push({ obj: t, img: follow.img, homeScale: follow.base, offX: ox, offY: oy, hatch: false, baseScale: 1 });
+      else this.focusStatic.push(t);
+    }
+  }
+
+  private clearFocusDecor(): void {
+    for (const d of this.focusDecor) d.obj.destroy();
+    this.focusDecor = [];
+    for (const o of this.focusStatic) o.destroy();
+    this.focusStatic = [];
+  }
+
+  /** Keep follow-decorations pinned to their tiles (hop / lift / scale); drop any
+   *  whose tile was destroyed (e.g. a cell resolving mid-cascade). */
+  update(): void {
+    if (this.focusDecor.length === 0) return;
+    for (let i = this.focusDecor.length - 1; i >= 0; i--) {
+      const d = this.focusDecor[i];
+      const img = d.img;
+      if (!img.active) { d.obj.destroy(); this.focusDecor.splice(i, 1); continue; }
+      d.obj.setDepth(img.depth + 1);
+      if (d.hatch) {
+        d.obj.setPosition(img.x, img.y);
+        (d.obj as Phaser.GameObjects.Image).setDisplaySize(img.displayWidth, img.displayHeight);
+      } else {
+        const r = img.scaleX / d.homeScale;
+        d.obj.setPosition(img.x + d.offX * r, img.y + d.offY * r);
+        d.obj.setScale(d.baseScale * r);
+      }
+    }
   }
 
   /** Re-apply the focus visuals after a board change (new big cells from a
@@ -1756,7 +1867,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.focusedClue) return;
     this.focusedClue = null;
     this.focusHoverGroup = null;
-    this.clearFocusHatch();
+    this.clearFocusDecor();
 
     this.focusOverlay?.destroy();
     this.focusOverlay = undefined;
